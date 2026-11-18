@@ -1,0 +1,28 @@
+# Decisions
+
+- **Build setup follows the chunkloader repo, not spec §2.1/2.2.** One Gradle build produces `questbook-<version>-mc26.2.jar` and `-mc26.3.jar` (custom `compileJava_<mc>` / `jar_<mc>` tasks, `mcVersions` list in `build.gradle.kts`). CI is a single `build.yml` that uploads both jars as artifact and attaches them to the GitHub release on `v*` tags. No ORAS/GHCR publishing, no matrix, no `-PmcVersion`. Per-version code goes into `src/mc<version>/java` (picked up automatically; none needed so far).
+- Quest YAML saves in the editor are small atomic file writes done on the main thread (spec rule 3 asks for async); database I/O is fully async.
+- REGION `baseY` is the editor's **feet block**, the same coordinate `Region.contains` compares (spec §5). `pos1` resets it, `pos2` lowers it if lower, so it ends up as the min of both. Only `baseY` is stored, not both corner heights. (An earlier version used the block below the feet, which made height 1 unreachable.)
+- Advancements are registered with `Bukkit.getUnsafe().loadAdvancement`. If it throws, the feature disables itself and logs; no datapack fallback was written. Not verified on a live server: whether already-online players see newly registered advancements before relogging.
+- Step-sign tag role: a sign that is both start sign and step sign keeps role `start`.
+- Dialog callbacks are re-dispatched to the main thread.
+- Chat capture for single-line input ends on the first message (`cancel` discards).
+- Open questions (§17) use the defaults: English messages, `questbook.editor` and `questbook.admin` default to ops, no draft markers.
+- Stale tags: signs no quest uses any more (file deleted by hand, step changed) lose their PDC tags when a player next right-clicks them. Until then they do not protect the sign, since protection looks at the quests, not the tag.
+- `/reload` is not supported: the plugin logs a warning if players are online while it enables.
+- Saving a change that leaves a published quest invalid (e.g. a SIGN step without a sign) drops it back to DRAFT and lists the problems, instead of rejecting the change. Players mid-quest then see "being rewritten" until it is fixed and republished.
+- Text delivery is cancelled per quest run, never per player, so abandoning or testing one quest cannot freeze another.
+- Advancements are registered parents first. Re-registering a quest also re-registers the quests below it, since the game drops children with their parent. Whether online players keep their progress for a re-registered advancement is unverified.
+- Movement is evaluated in the move event itself (MONITOR, destination location) after an allocation-free check, instead of scheduling a task per block move.
+- Paper builds stay unpinned (`.build.+`), like chunkloader.
+- No unit test for the quest state machine and no MockBukkit tests: the service needs a live Bukkit. Pure logic is covered.
+- Validation messages and editor error reasons (e.g. "max 50 steps") stay English in code as diagnostics. All menu and player text is in `messages.yml`.
+- Sign protection also covers the support block, pistons and flowing liquids, since a sign drops without its support. Editors may still remove a support block.
+- Deleting a quest removes it from the `requires` of quests that needed it (they would be locked forever otherwise).
+- Unknown trigger types, dimensions and advancement keys in hand-edited YAML load the quest as DRAFT with a logged problem, never as another trigger.
+- `/qe reload` reconciles online players' runs (clamp steps, drop vanished quests, start delivery for newly published ones). It restarts the step text for players mid-delivery of an unchanged quest.
+- Waxed signs cannot be edited by anyone, so the spec's "editors sneak + right-click to edit text" (§8.4) only lets editors reach the sign without triggering the quest; to change the text, unlink first.
+- Not done: re-delivering a step when an editor moves or removes steps under a live player (spec says keep the index); `dialogs.enabled` is re-read on reload, but `preview.interval_ticks` and turning `advancements.enabled` off need a restart.
+- Steps have two texts: `text` (told when the step starts, before the trigger) and an optional `after` (told when the trigger has fired, before the next step or, for the last step, before the completion title). Changes the spec's one-text step. The YAML key `after` is optional, so existing quest files load unchanged and need no migration. `/qe step after <id> <n>` and a book icon in the step menu edit it.
+- Advancements: Paper's `loadAdvancement` refuses to replace a loaded advancement and `removeAdvancement` only deletes its file, so a running server can add but not change or drop one. Changed or unpublished quests apply after the next restart; the hash of what was written is kept in `advancements.yml` so unchanged quests are left alone. (The earlier remove-then-load logged "already exists" and could leave the advancement missing on alternate restarts.)
+- KILL trigger (added on request, not in the spec): `{type: KILL, target: ANY|ANIMAL|MONSTER|PLAYER|<ENTITY_TYPE>, amount: 1..1000}`. Counts kills by a player (final blow, arrows included, MONITOR priority), only while the step is armed. The count lives in memory per run, so it restarts at 0 after a relog or restart. Persisting it would need a new column in `progress`.

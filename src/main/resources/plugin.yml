@@ -1,0 +1,14 @@
+name: Questbook
+version: '${version}'
+main: cloud.schwnbrg.questbook.QuestbookPlugin
+api-version: '${apiVersion}'
+description: Text-only quests with vanilla UI.
+libraries:
+  - org.xerial:sqlite-jdbc:3.47.1.0
+permissions:
+  questbook.editor:
+    description: Create and edit quests
+    default: op
+  questbook.admin:
+    description: Reload and reset progress
+    default: op

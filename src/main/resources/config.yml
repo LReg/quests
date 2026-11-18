@@ -1,0 +1,24 @@
+max_active_quests: 3
+text:
+  enabled: true
+  base_delay_ms: 600
+  per_char_ms: 25
+  max_delay_ms: 2500
+rumours:
+  enabled: true
+  radius: 12
+sounds:
+  step_complete: "minecraft:ui.button.click"
+  quest_complete: "minecraft:ui.toast.challenge_complete"
+  volume: 0.6
+dialogs:
+  enabled: true
+preview:
+  interval_ticks: 10
+  max_distance: 64
+advancements:
+  enabled: true
+export:
+  webhook_url: ""
+  secret: ""
+  server_name: "schwnbrg"
