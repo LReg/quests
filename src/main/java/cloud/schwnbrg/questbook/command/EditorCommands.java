@@ -136,8 +136,10 @@ public final class EditorCommands {
         qe.then(Commands.literal("validate").executes(c -> player(c, (p, x) -> ed.validate(p, null)))
                 .then(id().executes(c -> player(c, (p, x) -> ed.validate(p, s(x, "id"))))));
         qe.then(Commands.literal("reload").requires(EditorCommands::isAdmin).executes(c -> {
-            plugin.reloadAll();
-            c.getSource().getSender().sendMessage(m().get("reloaded", "count", String.valueOf(plugin.quests().quests().size())));
+            var report = plugin.reloadAll();
+            var sender = c.getSource().getSender();
+            sender.sendMessage(m().get("reloaded", "count", String.valueOf(report.quests())));
+            for (String note : report.needsRestart()) sender.sendMessage(m().get("reload-restart", "what", Messages.esc(note)));
             return 1;
         }));
         r.register(qe.build(), "Quest editor", List.of());

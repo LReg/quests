@@ -60,6 +60,13 @@ public final class EditorService {
         seen.computeIfAbsent(p.getUniqueId(), k -> new HashMap<>()).putIfAbsent(id, repo.lastModified(id));
     }
 
+    /** After a reload: editors whose selected quest is gone select nothing, so no menu or preview points at a ghost. */
+    public void dropMissingQuests() {
+        for (EditorSession s : sessions.values()) {
+            if (s.questId != null && plugin.quests().quest(s.questId) == null) s.questId = null;
+        }
+    }
+
     public void expireIdle() {
         long now = System.currentTimeMillis();
         sessions.entrySet().removeIf(e -> now - e.getValue().lastUse > 30 * 60_000L);
@@ -363,9 +370,15 @@ public final class EditorService {
         if (res != null) p.sendMessage(m.get("editor-saved"));
     }
 
-    public void setText(Player p, String id, int i, String text) {
+    /** Splits typed text into lines and drops trailing blank ones. */
+    private static List<String> textLines(String text) {
         List<String> lines = new ArrayList<>(List.of(text.split("\n", -1)));
         while (!lines.isEmpty() && lines.get(lines.size() - 1).isBlank()) lines.remove(lines.size() - 1);
+        return lines;
+    }
+
+    public void setText(Player p, String id, int i, String text) {
+        List<String> lines = textLines(text);
         if (lines.isEmpty()) {
             p.sendMessage(m.get("editor-text-empty"));
             return;
@@ -375,8 +388,7 @@ public final class EditorService {
 
     /** The optional text told after the trigger fired. An empty text clears it. */
     public void setAfter(Player p, String id, int i, String text) {
-        List<String> lines = new ArrayList<>(List.of(text.split("\n", -1)));
-        while (!lines.isEmpty() && lines.get(lines.size() - 1).isBlank()) lines.remove(lines.size() - 1);
+        List<String> lines = textLines(text);
         editStep(p, id, i, false, s -> s.withAfter(lines));
     }
 

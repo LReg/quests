@@ -8,7 +8,7 @@ libraries:
 permissions:
   questbook.editor:
     description: Create and edit quests
-    default: op
+    default: true
   questbook.admin:
     description: Reload and reset progress
     default: op

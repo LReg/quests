@@ -105,13 +105,18 @@ public final class QuestService {
     public void quit(Player p) {
         UUID id = p.getUniqueId();
         delivery.cancel(id);
+        forgetPlayer(id);
+        plugin.signs().forget(id);
+    }
+
+    /** Every per-player map in one place, so a new one cannot be forgotten on quit. */
+    private void forgetPlayer(UUID id) {
         data.remove(id);
         runs.remove(id);
         tests.remove(id);
         loading.remove(id);
         lastInteract.remove(id);
         abandonAsk.remove(id);
-        plugin.signs().forget(id);
     }
 
     // ---------- state queries ----------
@@ -229,9 +234,7 @@ public final class QuestService {
         db.saveProgress(p.getUniqueId(), np);
         db.addEvent(p.getUniqueId(), questId, "ABANDON", pr.step());
         plugin.export().send("ABANDON", q, p, pr.step());
-        Map<String, Run> mine = runs.get(p.getUniqueId());
-        Run gone = mine == null ? null : mine.remove(questId);
-        if (gone != null) delivery.cancel(p.getUniqueId(), gone);
+        dropRun(p.getUniqueId(), questId);
         p.sendMessage(m.get("abandoned", "quest", q.title()));
         plugin.signs().refresh(p, questId);
     }
@@ -243,11 +246,16 @@ public final class QuestService {
         if (p != null) {
             PlayerData d = data(p);
             if (d != null) d.progress.remove(questId);
-            Map<String, Run> mine = runs.get(id);
-            Run gone = mine == null ? null : mine.remove(questId);
-            if (gone != null) delivery.cancel(id, gone);
+            dropRun(id, questId);
             plugin.signs().refresh(p, questId);
         }
+    }
+
+    /** Removes a player's run of a quest and stops its text delivery. */
+    private void dropRun(UUID id, String questId) {
+        Map<String, Run> mine = runs.get(id);
+        Run gone = mine == null ? null : mine.remove(questId);
+        if (gone != null) delivery.cancel(id, gone);
     }
 
     // ---------- test mode ----------
@@ -317,6 +325,20 @@ public final class QuestService {
         return r.test ? m.get("test-prefix").append(c) : c;
     }
 
+    /** MiniMessage text lines of a step as components (empty line stays empty), with the test prefix for test runs. */
+    private List<Component> lines(Run r, List<String> texts) {
+        List<Component> out = new ArrayList<>();
+        for (String l : texts) out.add(prefixed(r, l.isEmpty() ? Component.empty() : Messages.mm(l)));
+        return out;
+    }
+
+    /** The step of a run whose trigger is armed (text delivered), or null if the run is not waiting for its trigger. */
+    private Step armedStep(Run r) {
+        Quest q = quests.get(r.questId);
+        if (q == null || !r.armed || r.step >= q.steps().size()) return null;
+        return q.steps().get(r.step);
+    }
+
     private void startStep(Player p, Run r) {
         Quest q = quests.get(r.questId);
         if (q == null || r.step >= q.steps().size()) return;
@@ -324,8 +346,7 @@ public final class QuestService {
         r.count = 0;
         delivery.cancel(p.getUniqueId(), r); // a re-delivery (republish) must not double up
         Step s = q.steps().get(r.step);
-        List<Component> lines = new ArrayList<>();
-        for (String l : s.text()) lines.add(prefixed(r, l.isEmpty() ? Component.empty() : Messages.mm(l)));
+        List<Component> lines = lines(r, s.text());
         Component footer = footer(p.getUniqueId(), r, s);
         if (footer != null) lines.add(footer);
         int step = r.step;
@@ -408,8 +429,7 @@ public final class QuestService {
         playSound(p, "sounds.step_complete");
         int next = r.step + 1;
         int finished = r.step;
-        List<Component> after = new ArrayList<>();
-        for (String l : q.steps().get(finished).after()) after.add(prefixed(r, l.isEmpty() ? Component.empty() : Messages.mm(l)));
+        List<Component> after = lines(r, q.steps().get(finished).after());
         if (!r.test) {
             db.addEvent(p.getUniqueId(), q.id(), "STEP", r.step);
         }
@@ -514,9 +534,9 @@ public final class QuestService {
     private boolean fire(Player p, Predicate<Trigger> match) {
         if (!eligible(p)) return false;
         for (Run r : runsOf(p)) {
-            Quest q = quests.get(r.questId);
-            if (q == null || !r.armed || r.step >= q.steps().size()) continue;
-            if (match.test(q.steps().get(r.step).trigger())) {
+            Step s = armedStep(r);
+            if (s == null) continue;
+            if (match.test(s.trigger())) {
                 completeStep(p, r);
                 return true;
             }
@@ -546,9 +566,9 @@ public final class QuestService {
         boolean enemy = victim instanceof org.bukkit.entity.Enemy;
         boolean player = victim instanceof Player;
         for (Run r : runsOf(p)) {
-            Quest q = quests.get(r.questId);
-            if (q == null || !r.armed || r.step >= q.steps().size()) continue;
-            if (!(q.steps().get(r.step).trigger() instanceof Trigger.Kill k) || !k.matches(type, animal, enemy, player)) continue;
+            Step s = armedStep(r);
+            if (s == null) continue;
+            if (!(s.trigger() instanceof Trigger.Kill k) || !k.matches(type, animal, enemy, player)) continue;
             r.count++;
             if (r.count >= k.amount()) {
                 completeStep(p, r);
@@ -602,12 +622,12 @@ public final class QuestService {
         String norm = Trigger.normalize(text);
         boolean any = false;
         for (Run r : runsOf(p)) {
-            Quest q = quests.get(r.questId);
-            if (q == null || !r.armed || r.step >= q.steps().size()) continue;
-            if (q.steps().get(r.step).trigger() instanceof Trigger.Answer a) {
+            Step step = armedStep(r);
+            if (step == null) continue;
+            if (step.trigger() instanceof Trigger.Answer a) {
                 any = true;
-                for (String s : a.answers()) {
-                    if (Trigger.normalize(s).equals(norm)) {
+                for (String answer : a.answers()) {
+                    if (Trigger.normalize(answer).equals(norm)) {
                         completeStep(p, r);
                         return true;
                     }
@@ -660,9 +680,12 @@ public final class QuestService {
 
     /**
      * After the whole quest set was replaced (/qe reload): drop runs of vanished quests, clamp step indices,
-     * and start delivery for runs that were waiting for the quest to be published.
+     * stop runs whose quest is a draft now, and restart text only where it makes sense: the run waited for its quest
+     * to be published or its current step changed. A run in the middle of an unchanged step is left alone.
+     *
+     * @param before the quests as they were before the reload
      */
-    public void reconcile() {
+    public void reconcile(Map<String, Quest> before) {
         for (Map.Entry<UUID, Map<String, Run>> e : List.copyOf(runs.entrySet())) {
             for (Run r : List.copyOf(e.getValue().values())) {
                 Quest q = quests.get(r.questId);
@@ -671,11 +694,34 @@ public final class QuestService {
                     delivery.cancel(e.getKey(), r);
                     continue;
                 }
+                if (!q.published()) {
+                    // players must not finish steps of a draft: stop counting, resume when it is published again
+                    r.armed = false;
+                    delivery.cancel(e.getKey(), r);
+                    continue;
+                }
+                int stepBefore = r.step;
                 clampRuns(q);
                 Player p = Bukkit.getPlayer(e.getKey());
-                if (p != null && q.published() && !r.armed) startStep(p, r);
+                if (p != null && needsRestart(before.get(r.questId), q, r, stepBefore)) startStep(p, r);
             }
         }
+        // test runs of vanished quests or of quests without steps would point at nothing
+        for (Map.Entry<UUID, Run> e : List.copyOf(tests.entrySet())) {
+            Quest q = quests.get(e.getValue().questId);
+            if (q == null || q.steps().isEmpty() || e.getValue().step >= q.steps().size()) {
+                tests.remove(e.getKey());
+                delivery.cancel(e.getKey(), e.getValue());
+            }
+        }
+    }
+
+    /** True if the run's current step has to be told again after a reload. */
+    private static boolean needsRestart(Quest before, Quest now, Run r, int stepBefore) {
+        if (r.armed) return false;
+        if (before == null || !before.published()) return true; // was waiting for publication
+        if (stepBefore != r.step) return true; // clamped to another step
+        return stepBefore >= before.steps().size() || !before.steps().get(stepBefore).equals(now.steps().get(r.step));
     }
 
     /** The first required quest this player has not finished yet, or null. For the locked sign text. */
