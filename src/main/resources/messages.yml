@@ -3,6 +3,7 @@ prefix: "<gold>[Questbook]</gold> "
 loading: "<gray>Your quest data is still loading, try again in a moment."
 players-only: "<red>Only players can do this."
 reloaded: "<green>Reloaded. {count} quests loaded."
+reload-restart: "<yellow>Needs a server restart: {what}"
 
 rumour: "<gray><i>You hear a whisper of a story nearby…</i>"
 intro-header: "<gold><bold>✦ {title}</bold>"

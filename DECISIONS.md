@@ -7,7 +7,7 @@
 - Step-sign tag role: a sign that is both start sign and step sign keeps role `start`.
 - Dialog callbacks are re-dispatched to the main thread.
 - Chat capture for single-line input ends on the first message (`cancel` discards).
-- Open questions (§17) use the defaults: English messages, `questbook.editor` and `questbook.admin` default to ops, no draft markers.
+- Open questions (§17) use the defaults: English messages, `questbook.admin` defaults to ops, no draft markers. `questbook.editor` defaults to `true` (everybody) on request; servers that want it restricted set the node to false for the default group.
 - Stale tags: signs no quest uses any more (file deleted by hand, step changed) lose their PDC tags when a player next right-clicks them. Until then they do not protect the sign, since protection looks at the quests, not the tag.
 - `/reload` is not supported: the plugin logs a warning if players are online while it enables.
 - Saving a change that leaves a published quest invalid (e.g. a SIGN step without a sign) drops it back to DRAFT and lists the problems, instead of rejecting the change. Players mid-quest then see "being rewritten" until it is fixed and republished.
@@ -20,7 +20,7 @@
 - Sign protection also covers the support block, pistons and flowing liquids, since a sign drops without its support. Editors may still remove a support block.
 - Deleting a quest removes it from the `requires` of quests that needed it (they would be locked forever otherwise).
 - Unknown trigger types, dimensions and advancement keys in hand-edited YAML load the quest as DRAFT with a logged problem, never as another trigger.
-- `/qe reload` reconciles online players' runs (clamp steps, drop vanished quests, start delivery for newly published ones). It restarts the step text for players mid-delivery of an unchanged quest.
+- `/qe reload` reconciles online players' runs: clamps steps, drops vanished quests (also test runs and editor selections), disarms runs of quests that are drafts now, and restarts the step text only for runs that waited for publication or whose current step changed. A run mid-delivery of an unchanged step is left alone. The command lists what only applies after a restart (advancements of changed/unpublished quests, `preview.interval_ticks`, `advancements.enabled`). It still runs on the main thread.
 - Waxed signs cannot be edited by anyone, so the spec's "editors sneak + right-click to edit text" (§8.4) only lets editors reach the sign without triggering the quest; to change the text, unlink first.
 - Not done: re-delivering a step when an editor moves or removes steps under a live player (spec says keep the index); `dialogs.enabled` is re-read on reload, but `preview.interval_ticks` and turning `advancements.enabled` off need a restart.
 - Steps have two texts: `text` (told when the step starts, before the trigger) and an optional `after` (told when the trigger has fired, before the next step or, for the last step, before the completion title). Changes the spec's one-text step. The YAML key `after` is optional, so existing quest files load unchanged and need no migration. `/qe step after <id> <n>` and a book icon in the step menu edit it.
