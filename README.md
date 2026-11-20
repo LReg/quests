@@ -8,7 +8,7 @@ Text-only quests for a vanilla-feeling Paper server. Spec: the "Questbook – Im
 
 ## Use
 
-Players: `/journal`, `/quest answer|abandon|mute|unmute`. Editors (`questbook.editor`): `/qe` opens the GUI; `/qe create`, `step add`, `sign start`, `publish` build a quest from commands. Details are in the spec §11. Config in `plugins/Questbook/config.yml` and `messages.yml`.
+Players: `/journal`, `/quest answer|abandon|mute|unmute`. Editors (`questbook.editor`, granted to everybody by default; take it away with a permissions plugin, `questbook.admin` stays op-only): `/qe` opens the GUI; `/qe create`, `step add`, `sign start` (on an empty sign), `publish` build a quest from commands. Editors only see and edit their own quests; admins (`questbook.admin`) see all and can reassign one with `/qe owner <quest> <player>`. Details are in the spec §11. Config in `plugins/Questbook/config.yml` and `messages.yml`.
 
 ## Steps and triggers
 

@@ -130,12 +130,27 @@ public final class SignService {
         s.update();
     }
 
-    /** Links a sign as start sign. Returns an error message key or null. */
+    /**
+     * Links a sign as start sign. Returns an error message key or null. The sign must be blank on both sides, so
+     * nobody can turn a sign with somebody's writing into a waxed, unbreakable quest sign.
+     */
     public String linkStart(Quest q, Block b) {
-        if (!(b.getState() instanceof Sign)) return "editor-not-a-sign";
+        if (!(b.getState() instanceof Sign s)) return "editor-not-a-sign";
         Quest other = questAt(b);
         if (other != null && !other.id().equals(q.id())) return "editor-sign-taken";
+        if (quests.isStepSign(b)) return "editor-sign-taken";
+        if (!isBlank(s)) return "editor-sign-not-empty";
         return null;
+    }
+
+    /** True if no line on either side of the sign has visible text. Our per-player text is sent as packets, never stored. */
+    static boolean isBlank(Sign s) {
+        for (Side side : Side.values()) {
+            for (Component line : s.getSide(side).lines()) {
+                if (!PlainTextComponentSerializer.plainText().serialize(line).isBlank()) return false;
+            }
+        }
+        return true;
     }
 
     public void relinkIndex(Quest before, Quest after) {
@@ -249,10 +264,10 @@ public final class SignService {
         for (Player p : Bukkit.getOnlinePlayers()) refresh(p, questId);
     }
 
-    /** Verifies links for /qe validate. */
-    public List<String> problems() {
+    /** Verifies the sign links of these quests for /qe validate. */
+    public List<String> problems(java.util.Collection<Quest> which) {
         List<String> out = new ArrayList<>();
-        for (Quest q : quests.quests().values()) {
+        for (Quest q : which) {
             if (q.startSign() != null) {
                 Block b = q.startSign().block();
                 if (b != null && b.getWorld().isChunkLoaded(b.getX() >> 4, b.getZ() >> 4) && !(b.getState() instanceof Sign)) {

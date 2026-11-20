@@ -60,6 +60,13 @@ public final class EditorService {
         seen.computeIfAbsent(p.getUniqueId(), k -> new HashMap<>()).putIfAbsent(id, repo.lastModified(id));
     }
 
+    /** After a reload: editors whose selected quest is gone select nothing, so no menu or preview points at a ghost. */
+    public void dropMissingQuests() {
+        for (EditorSession s : sessions.values()) {
+            if (s.questId != null && plugin.quests().quest(s.questId) == null) s.questId = null;
+        }
+    }
+
     public void expireIdle() {
         long now = System.currentTimeMillis();
         sessions.entrySet().removeIf(e -> now - e.getValue().lastUse > 30 * 60_000L);
@@ -67,8 +74,41 @@ public final class EditorService {
 
     // ---------- core mutation ----------
 
-    private Quest require(Player p, String id) {
+    /** Admins edit every quest. Everybody else only their own; quests from before ownership belong to the editor named as author. */
+    public boolean canEdit(Player p, Quest q) {
+        if (!p.hasPermission("questbook.editor")) return false;
+        if (p.hasPermission("questbook.admin")) return true;
+        if (!q.owner().isBlank()) return q.owner().equals(p.getUniqueId().toString());
+        return p.getName().equalsIgnoreCase(q.author());
+    }
+
+    /** The quest if it exists and this player may see and edit it, else null. Someone else's quest looks like a missing one. */
+    public Quest editable(Player p, String id) {
         Quest q = plugin.quests().quest(id);
+        return q != null && canEdit(p, q) ? q : null;
+    }
+
+    public List<Quest> editableQuests(Player p) {
+        List<Quest> out = new ArrayList<>();
+        for (Quest q : plugin.quests().quests().values()) if (canEdit(p, q)) out.add(q);
+        return out;
+    }
+
+    /** True if every quest that uses this sign (start sign or SIGN step) is editable by the player. */
+    public boolean maySignEdit(Player p, Block sign) {
+        if (!p.hasPermission("questbook.editor")) return false;
+        for (Quest q : plugin.quests().quests().values()) {
+            boolean uses = q.startSign() != null && q.startSign().sameAs(sign);
+            for (Step s : q.steps()) {
+                if (s.trigger() instanceof Trigger.SignClick sc && sc.sign() != null && sc.sign().sameAs(sign)) uses = true;
+            }
+            if (uses && !canEdit(p, q)) return false;
+        }
+        return true;
+    }
+
+    private Quest require(Player p, String id) {
+        Quest q = editable(p, id);
         if (q == null) p.sendMessage(m.get("editor-unknown-quest", "quest", Messages.esc(id)));
         return q;
     }
@@ -93,6 +133,7 @@ public final class EditorService {
             return null;
         }
         if (after == null) return null;
+        if (after.owner().isBlank() && p.getName().equalsIgnoreCase(after.author())) after = after.withOwner(p.getUniqueId().toString());
         if (after.published()) {
             // a live quest must never be saved in a state players cannot finish: drop it back to draft instead
             List<String> errs = Validation.errors(after, plugin.quests().quests(), true);
@@ -154,7 +195,7 @@ public final class EditorService {
             p.sendMessage(m.get("editor-id-taken", "quest", id));
             return null;
         }
-        Quest q = Quest.draft(id, title, p.getName());
+        Quest q = Quest.draft(id, title, p.getName()).withOwner(p.getUniqueId().toString());
         try {
             repo.save(q);
         } catch (IOException e) {
@@ -235,7 +276,7 @@ public final class EditorService {
     public void toggleRequire(Player p, String id, String other, Boolean add) {
         mutate(p, id, false, q -> {
             if (other.equals(id)) throw new IllegalArgumentException("a quest cannot require itself");
-            if (plugin.quests().quest(other) == null) throw new IllegalArgumentException("unknown quest " + other);
+            if (editable(p, other) == null) throw new IllegalArgumentException("unknown quest " + other);
             List<String> r = new ArrayList<>(q.requires());
             boolean has = r.contains(other);
             boolean want = add == null ? !has : add;
@@ -264,6 +305,10 @@ public final class EditorService {
             p.sendMessage(m.get("editor-look-at-sign"));
             return;
         }
+        if (!maySignEdit(p, b)) {
+            p.sendMessage(m.get("editor-not-yours"));
+            return;
+        }
         String err = plugin.signs().linkStart(q, b);
         if (err != null) {
             p.sendMessage(m.get(err));
@@ -286,6 +331,10 @@ public final class EditorService {
             p.sendMessage(m.get("editor-look-at-sign"));
             return;
         }
+        if (!maySignEdit(p, b)) {
+            p.sendMessage(m.get("editor-not-yours"));
+            return;
+        }
         Quest q = plugin.signs().questAt(b);
         plugin.signs().untag(b);
         if (q != null) {
@@ -305,7 +354,7 @@ public final class EditorService {
     /** An editor broke a sign that is a SIGN trigger: those steps can no longer be finished, so say so. */
     public void onStepSignBroken(Player p, Block b) {
         List<String> ids = new ArrayList<>();
-        for (Quest q : plugin.quests().quests().values()) {
+        for (Quest q : editableQuests(p)) {
             for (Step s : q.steps()) {
                 if (s.trigger() instanceof Trigger.SignClick sc && sc.sign() != null && sc.sign().sameAs(b)) {
                     ids.add(q.id());
@@ -363,9 +412,15 @@ public final class EditorService {
         if (res != null) p.sendMessage(m.get("editor-saved"));
     }
 
-    public void setText(Player p, String id, int i, String text) {
+    /** Splits typed text into lines and drops trailing blank ones. */
+    private static List<String> textLines(String text) {
         List<String> lines = new ArrayList<>(List.of(text.split("\n", -1)));
         while (!lines.isEmpty() && lines.get(lines.size() - 1).isBlank()) lines.remove(lines.size() - 1);
+        return lines;
+    }
+
+    public void setText(Player p, String id, int i, String text) {
+        List<String> lines = textLines(text);
         if (lines.isEmpty()) {
             p.sendMessage(m.get("editor-text-empty"));
             return;
@@ -375,8 +430,7 @@ public final class EditorService {
 
     /** The optional text told after the trigger fired. An empty text clears it. */
     public void setAfter(Player p, String id, int i, String text) {
-        List<String> lines = new ArrayList<>(List.of(text.split("\n", -1)));
-        while (!lines.isEmpty() && lines.get(lines.size() - 1).isBlank()) lines.remove(lines.size() - 1);
+        List<String> lines = textLines(text);
         editStep(p, id, i, false, s -> s.withAfter(lines));
     }
 
@@ -439,6 +493,14 @@ public final class EditorService {
         if (t instanceof Trigger.SignClick) {
             if (!(b.getState() instanceof Sign)) {
                 p.sendMessage(m.get("editor-not-a-sign"));
+                return;
+            }
+            if (!maySignEdit(p, b)) {
+                p.sendMessage(m.get("editor-not-yours"));
+                return;
+            }
+            if (plugin.signs().questAt(b) != null) {
+                p.sendMessage(m.get("editor-sign-taken"));
                 return;
             }
             plugin.signs().tag(b, "step", null);
@@ -583,12 +645,12 @@ public final class EditorService {
 
     public void validate(Player p, String id) {
         List<String> out = new ArrayList<>();
-        for (Quest q : plugin.quests().quests().values()) {
+        for (Quest q : editableQuests(p)) {
             if (id != null && !q.id().equals(id)) continue;
             for (String e : errors(q, q.published())) out.add(q.id() + ": " + e);
             for (String w : warnings(q)) out.add(q.id() + ": warning: " + w);
         }
-        if (id == null) out.addAll(plugin.signs().problems());
+        if (id == null) out.addAll(plugin.signs().problems(editableQuests(p)));
         if (out.isEmpty()) p.sendMessage(m.get("editor-valid"));
         else for (String s : out) p.sendMessage(m.get("editor-problem", "problem", Messages.esc(s)));
     }

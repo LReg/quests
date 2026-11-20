@@ -35,6 +35,8 @@ public final class AdvancementSync {
     private final QuestbookPlugin plugin;
     private boolean broken;
     private YamlConfiguration hashes;
+    /** Quests whose advancement in the running game differs from their quest until the next restart. */
+    private final Set<String> pendingRestart = new java.util.TreeSet<>();
 
     public AdvancementSync(QuestbookPlugin plugin) {
         this.plugin = plugin;
@@ -79,6 +81,9 @@ public final class AdvancementSync {
     }
 
     // ---------- registration ----------
+
+    /** Quest ids whose advancement only matches the quest after the next restart (changed, unpublished or deleted). */
+    public Set<String> pendingRestart() { return Set.copyOf(pendingRestart); }
 
     /** Registers root and all published quests. Call at enable, before players join. */
     public void registerAll() {
@@ -139,10 +144,12 @@ public final class AdvancementSync {
             if (Bukkit.getAdvancement(k) == null) {
                 Bukkit.getUnsafe().loadAdvancement(k, json);
                 setHash(quest.id(), hash);
+                pendingRestart.remove(quest.id());
             } else if (!hash.equals(hashes().getString(quest.id()))) {
                 // loaded already with other content: it cannot be replaced while running. Delete its file so the next start loads this one.
                 Bukkit.getUnsafe().removeAdvancement(k);
                 setHash(quest.id(), hash);
+                pendingRestart.add(quest.id());
                 plugin.getLogger().info("Advancement of " + quest.id() + " changed: it is updated after the next server restart.");
             }
         } catch (RuntimeException | LinkageError e) {
@@ -156,6 +163,7 @@ public final class AdvancementSync {
         try {
             Bukkit.getUnsafe().removeAdvancement(key("quest/" + questId));
             if (hashes().contains(questId)) setHash(questId, null);
+            pendingRestart.add(questId);
         } catch (RuntimeException | LinkageError e) {
             plugin.getLogger().warning("Could not remove advancement " + questId + ": " + e);
         }

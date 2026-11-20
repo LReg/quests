@@ -24,7 +24,7 @@ import org.bukkit.configuration.file.YamlConfiguration;
 /** Reads and writes quests/&lt;id&gt;.yml, the source of truth. */
 public final class QuestRepository {
 
-    private static final Set<String> QUEST_KEYS = Set.of("id", "title", "summary", "status", "author", "start_sign",
+    private static final Set<String> QUEST_KEYS = Set.of("id", "title", "summary", "status", "author", "owner", "start_sign",
             "requires", "repeatable", "repeat_cooldown_seconds", "steps");
 
     private final Path dir;
@@ -99,7 +99,7 @@ public final class QuestRepository {
         }
         return new Quest(id, c.getString("title", id), c.getString("summary", ""), status,
                 block(c.getConfigurationSection("start_sign")), List.copyOf(c.getStringList("requires")),
-                c.getBoolean("repeatable"), c.getInt("repeat_cooldown_seconds"), c.getString("author", ""), steps);
+                c.getBoolean("repeatable"), c.getInt("repeat_cooldown_seconds"), c.getString("author", ""), c.getString("owner", ""), steps);
     }
 
     private Step parseStep(Map<?, ?> m, String file, int n, List<String> problems) {
@@ -198,6 +198,7 @@ public final class QuestRepository {
         y.set("summary", q.summary());
         y.set("status", q.status().name());
         y.set("author", q.author());
+        if (!q.owner().isBlank()) y.set("owner", q.owner());
         if (q.startSign() != null) y.set("start_sign", blockMap(q.startSign()));
         y.set("requires", q.requires());
         y.set("repeatable", q.repeatable());

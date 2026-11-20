@@ -45,12 +45,12 @@ public final class EditorCommands {
     private static boolean isAdmin(CommandSourceStack s) { return s.getSender().hasPermission("questbook.admin"); }
 
     private SuggestionProvider<CommandSourceStack> questIds() { return (c, b) -> {
-        for (String id : plugin.quests().quests().keySet()) b.suggest(id);
+        if (c.getSource().getSender() instanceof Player sp) ed.editableQuests(sp).forEach(q -> b.suggest(q.id())); else plugin.quests().quests().keySet().forEach(b::suggest);
         return b.buildFuture();
     }; }
 
     private SuggestionProvider<CommandSourceStack> stepNumbers() { return (c, b) -> {
-        Quest q = plugin.quests().quest(StringArgumentType.getString(c, "id"));
+        Quest q = c.getSource().getSender() instanceof Player sp ? ed.editable(sp, StringArgumentType.getString(c, "id")) : null;
         if (q != null) for (int i = 1; i <= q.steps().size(); i++) b.suggest(i);
         return b.buildFuture();
     }; }
@@ -85,7 +85,7 @@ public final class EditorCommands {
                     if (q != null) plugin.menus().openQuest(p, q.id(), 0);
                 })))));
         qe.then(Commands.literal("edit").then(id().executes(c -> player(c, (p, x) -> {
-            if (plugin.quests().quest(s(x, "id")) == null) p.sendMessage(m().get("editor-unknown-quest", "quest", Messages.esc(s(x, "id"))));
+            if (ed.editable(p, s(x, "id")) == null) p.sendMessage(m().get("editor-unknown-quest", "quest", Messages.esc(s(x, "id"))));
             else plugin.menus().openQuest(p, s(x, "id"), 0);
         }))));
         qe.then(Commands.literal("delete").then(id().executes(c -> player(c, (p, x) -> {
@@ -95,7 +95,7 @@ public final class EditorCommands {
         qe.then(Commands.literal("title").then(id().then(Commands.argument("title", StringArgumentType.greedyString())
                 .executes(c -> player(c, (p, x) -> ed.setTitle(p, s(x, "id"), s(x, "title")))))));
         qe.then(Commands.literal("summary").then(id().executes(c -> player(c, (p, x) -> {
-            Quest q = plugin.quests().quest(s(x, "id"));
+            Quest q = ed.editable(p, s(x, "id"));
             if (q == null) return;
             plugin.dialogs().textInput(p, title("input-title-summary"), q.summary(), true, t -> ed.setSummary(p, q.id(), String.join(" ", t.split("\n")).strip()), () -> { });
         }))));
@@ -121,7 +121,7 @@ public final class EditorCommands {
         qe.then(Commands.literal("test")
                 .then(Commands.literal("stop").executes(c -> player(c, (p, x) -> plugin.quests().stopTest(p))))
                 .then(id().executes(c -> player(c, (p, x) -> {
-                    Quest q = plugin.quests().quest(s(x, "id"));
+                    Quest q = ed.editable(p, s(x, "id"));
                     if (q == null) p.sendMessage(m().get("editor-unknown-quest", "quest", Messages.esc(s(x, "id"))));
                     else plugin.quests().startTest(p, q);
                 }))));
@@ -132,12 +132,35 @@ public final class EditorCommands {
                     return b.buildFuture();
                 })
                 .then(id().executes(this::reset))));
+        qe.then(Commands.literal("owner").requires(EditorCommands::isAdmin).then(id()
+                .executes(c -> player(c, (p, x) -> {
+                    Quest q = plugin.quests().quest(s(x, "id"));
+                    if (q == null) p.sendMessage(m().get("editor-unknown-quest", "quest", Messages.esc(s(x, "id"))));
+                    else if (q.owner().isBlank()) p.sendMessage(m().get("editor-owner-none", "quest", q.id()));
+                    else p.sendMessage(m().get("editor-owner-is", "quest", q.id(), "owner", Messages.esc(ownerName(q.owner()))));
+                }))
+                .then(Commands.argument("player", StringArgumentType.word()).suggests((c, b) -> {
+                    Bukkit.getOnlinePlayers().forEach(o -> b.suggest(o.getName()));
+                    return b.buildFuture();
+                }).executes(c -> player(c, (p, x) -> {
+                    String name = s(x, "player");
+                    var known = Bukkit.getPlayerExact(name) != null ? Bukkit.getPlayerExact(name) : Bukkit.getOfflinePlayerIfCached(name);
+                    if (known == null) {
+                        p.sendMessage(m().get("editor-unknown-player", "player", Messages.esc(name)));
+                        return;
+                    }
+                    if (ed.mutate(p, s(x, "id"), false, q -> q.withOwner(known.getUniqueId().toString())) != null) {
+                        p.sendMessage(m().get("editor-owner-set", "quest", s(x, "id"), "owner", Messages.esc(String.valueOf(known.getName()))));
+                    }
+                })))));
         qe.then(Commands.literal("stats").then(id().executes(c -> player(c, (p, x) -> plugin.stats(p, s(x, "id"))))));
         qe.then(Commands.literal("validate").executes(c -> player(c, (p, x) -> ed.validate(p, null)))
                 .then(id().executes(c -> player(c, (p, x) -> ed.validate(p, s(x, "id"))))));
         qe.then(Commands.literal("reload").requires(EditorCommands::isAdmin).executes(c -> {
-            plugin.reloadAll();
-            c.getSource().getSender().sendMessage(m().get("reloaded", "count", String.valueOf(plugin.quests().quests().size())));
+            var report = plugin.reloadAll();
+            var sender = c.getSource().getSender();
+            sender.sendMessage(m().get("reloaded", "count", String.valueOf(report.quests())));
+            for (String note : report.needsRestart()) sender.sendMessage(m().get("reload-restart", "what", Messages.esc(note)));
             return 1;
         }));
         r.register(qe.build(), "Quest editor", List.of());
@@ -151,12 +174,22 @@ public final class EditorCommands {
 
     private int list(CommandContext<CommandSourceStack> c) {
         var sender = c.getSource().getSender();
-        if (plugin.quests().quests().isEmpty()) sender.sendMessage(m().get("editor-none"));
-        for (Quest q : plugin.quests().quests().values()) {
+        java.util.Collection<Quest> shown = sender instanceof Player sp ? ed.editableQuests(sp) : plugin.quests().quests().values();
+        if (shown.isEmpty()) sender.sendMessage(m().get("editor-none"));
+        for (Quest q : shown) {
             sender.sendMessage(m().get("editor-list-line", "id", q.id(), "title", Messages.esc(cloud.schwnbrg.questbook.model.Validation.plain(q.title())),
                     "status", q.status().name(), "steps", String.valueOf(q.steps().size())));
         }
         return 1;
+    }
+
+    private static String ownerName(String uuid) {
+        try {
+            String n = Bukkit.getOfflinePlayer(UUID.fromString(uuid)).getName();
+            return n != null ? n : uuid;
+        } catch (IllegalArgumentException e) {
+            return uuid;
+        }
     }
 
     private int reset(CommandContext<CommandSourceStack> c) {
@@ -188,7 +221,7 @@ public final class EditorCommands {
         st.then(Commands.literal("move").then(id().then(n().then(Commands.argument("to", IntegerArgumentType.integer(1))
                 .executes(c -> player(c, (p, x) -> ed.moveStep(p, s(x, "id"), i(x, "n") - 1, i(x, "to") - 1)))))));
         st.then(Commands.literal("text").then(id().then(n().executes(c -> player(c, (p, x) -> {
-            Quest q = plugin.quests().quest(s(x, "id"));
+            Quest q = ed.editable(p, s(x, "id"));
             int idx = i(x, "n") - 1;
             if (q == null || idx >= q.steps().size()) {
                 p.sendMessage(m().get("editor-unknown-step", "step", String.valueOf(idx + 1)));
@@ -199,7 +232,7 @@ public final class EditorCommands {
         st.then(Commands.literal("after").then(id().then(n().then(Commands.literal("clear")
                 .executes(c -> player(c, (p, x) -> ed.setAfter(p, s(x, "id"), i(x, "n") - 1, ""))))
                 .executes(c -> player(c, (p, x) -> {
-            Quest q = plugin.quests().quest(s(x, "id"));
+            Quest q = ed.editable(p, s(x, "id"));
             int idx = i(x, "n") - 1;
             if (q == null || idx >= q.steps().size()) {
                 p.sendMessage(m().get("editor-unknown-step", "step", String.valueOf(idx + 1)));
@@ -209,7 +242,7 @@ public final class EditorCommands {
                     t -> ed.setAfter(p, q.id(), idx, t), () -> { });
         })))));
         st.then(Commands.literal("hint").then(id().then(n().executes(c -> player(c, (p, x) -> {
-            Quest q = plugin.quests().quest(s(x, "id"));
+            Quest q = ed.editable(p, s(x, "id"));
             int idx = i(x, "n") - 1;
             if (q == null || idx >= q.steps().size()) {
                 p.sendMessage(m().get("editor-unknown-step", "step", String.valueOf(idx + 1)));

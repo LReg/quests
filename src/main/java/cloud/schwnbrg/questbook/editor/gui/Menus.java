@@ -44,7 +44,7 @@ public final class Menus {
         Database db = plugin.database();
         db.playerCounts().thenAccept(counts -> Bukkit.getScheduler().runTask(plugin, () -> {
             if (!p.isOnline()) return;
-            List<Quest> all = new ArrayList<>(plugin.quests().quests().values());
+            List<Quest> all = editor.editableQuests(p);
             int pages = Math.max(1, (all.size() + PAGE - 1) / PAGE);
             int pg = Math.max(0, Math.min(page, pages - 1));
             Menu menu = new Menu(6, m().get("menu-list-title"));
@@ -83,7 +83,7 @@ public final class Menus {
     // ---------- B: quest menu ----------
 
     public void openQuest(Player p, String id, int page) {
-        Quest q = plugin.quests().quest(id);
+        Quest q = editor.editable(p, id);
         if (q == null) return;
         EditorSession s = editor.session(p);
         s.questId = id;
@@ -242,7 +242,7 @@ public final class Menus {
     // ---------- C: step menu ----------
 
     public void openStep(Player p, String id, int idx) {
-        Quest q = plugin.quests().quest(id);
+        Quest q = editor.editable(p, id);
         if (q == null || idx < 0 || idx >= q.steps().size()) {
             openQuest(p, id, 0);
             return;
@@ -314,7 +314,7 @@ public final class Menus {
         menu.set(45, Menu.icon(Material.ARROW, t("gui-back")), c -> openQuest(p, id, idx / 27));
         menu.set(47, Menu.icon(Material.COMPASS, t("gui-test")), c -> {
             p.closeInventory();
-            plugin.quests().startTest(p, plugin.quests().quest(id));
+            { Quest tq = editor.editable(p, id); if (tq != null) plugin.quests().startTest(p, tq); }
         });
         menu.set(53, Menu.icon(Material.BARRIER, t("gui-close")), c -> p.closeInventory());
         menu.open(p);
@@ -471,7 +471,7 @@ public final class Menus {
     }
 
     public void openKillTargets(Player p, String id, int step, int page) {
-        Quest q = plugin.quests().quest(id);
+        Quest q = editor.editable(p, id);
         if (q == null || step < 0 || step >= q.steps().size()) return;
         String current = q.steps().get(step).trigger() instanceof Trigger.Kill k ? k.target() : "";
         List<String> all = killTargets();
@@ -506,7 +506,7 @@ public final class Menus {
             menu.set(slot++, Menu.icon(triggerIcon(Trigger.blank(type)), "<white>" + type, t("gui-desc-" + type.toLowerCase())), c -> {
                 if (step < 0) {
                     editor.addStep(p, id, type, null);
-                    Quest q = plugin.quests().quest(id);
+                    Quest q = editor.editable(p, id);
                     openStep(p, id, q == null ? 0 : q.steps().size() - 1);
                 } else {
                     editor.setTriggerType(p, id, step, type);
@@ -525,11 +525,11 @@ public final class Menus {
     // ---------- E: requirements ----------
 
     public void openRequires(Player p, String id) {
-        Quest q = plugin.quests().quest(id);
+        Quest q = editor.editable(p, id);
         if (q == null) return;
         Menu menu = new Menu(6, m().get("menu-requires-title"));
         int i = 0;
-        for (Quest o : plugin.quests().quests().values()) {
+        for (Quest o : editor.editableQuests(p)) {
             if (o.id().equals(id) || i >= PAGE) continue;
             boolean req = q.requires().contains(o.id());
             menu.set(i++, Menu.icon(req ? Material.LIME_STAINED_GLASS_PANE : Material.GRAY_STAINED_GLASS_PANE, (req ? "<green>" : "<gray>") + esc(Validation.plain(o.title())),

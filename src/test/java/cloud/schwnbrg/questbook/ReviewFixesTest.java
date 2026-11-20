@@ -110,6 +110,24 @@ class ReviewFixesTest {
     }
 
     @Test
+    void ownerRoundTripsAndOldFilesHaveNone(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir) throws Exception {
+        var repo = new cloud.schwnbrg.questbook.storage.QuestRepository(dir, java.util.logging.Logger.getAnonymousLogger());
+        Quest q = Quest.draft("mine", "Mine", "Nils").withOwner("0061e708-1d2f-3e64-8617-59fef9008cc0");
+        repo.save(q);
+        assertEquals("0061e708-1d2f-3e64-8617-59fef9008cc0", repo.loadAll().get("mine").owner());
+        assertEquals(q, repo.loadAll().get("mine"));
+        java.nio.file.Files.writeString(dir.resolve("old.yml"), """
+                id: old
+                title: "Old"
+                status: DRAFT
+                author: Nils
+                steps: []
+                """);
+        assertEquals("", repo.loadAll().get("old").owner());
+        assertEquals("0061e708", q.withTitle("x").owner().substring(0, 8), "other changes keep the owner");
+    }
+
+    @Test
     void answersCollapseAllWhitespace() {
         assertEquals("a clock", Trigger.normalize("  A\tClock!! "));
         assertEquals("a clock", Trigger.normalize("a   clock"));

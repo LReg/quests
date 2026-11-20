@@ -130,7 +130,7 @@ public final class QuestListener implements Listener {
         if (isSign) signs.cleanIfStale(b); // tags left behind by a quest file deleted by hand
         Quest start = isSign ? signs.questAt(b) : null;
         boolean tagged = isSign && (start != null || quests.isStepSign(b));
-        if (tagged && editor && p.isSneaking()) return; // editors keep vanilla behaviour
+        if (tagged && editor && p.isSneaking() && plugin.editor().maySignEdit(p, b)) return; // owners keep vanilla behaviour
         if (isSign) {
             if (quests.onSignClick(p, b)) {
                 e.setCancelled(true);
@@ -178,23 +178,26 @@ public final class QuestListener implements Listener {
 
     private static final BlockFace[] FACES = {BlockFace.UP, BlockFace.DOWN, BlockFace.NORTH, BlockFace.SOUTH, BlockFace.EAST, BlockFace.WEST};
 
-    /** True if this block holds up a protected sign: a sign drops when its support goes, so the support is protected too. */
-    private boolean supportsProtected(Block b) {
+    private boolean supportsProtected(Block b) { return !supportedSigns(b).isEmpty(); }
+
+    /** The protected signs this block holds up: a sign drops when its support goes, so the support is protected too. */
+    private java.util.List<Block> supportedSigns(Block b) {
+        java.util.List<Block> out = new java.util.ArrayList<>();
         for (BlockFace f : FACES) {
             Block n = b.getRelative(f);
             if (!Tag.ALL_SIGNS.isTagged(n.getType()) || !protectedSign(n)) continue;
             if (Tag.CEILING_HANGING_SIGNS.isTagged(n.getType())) {
-                if (f == BlockFace.UP) return true;
+                if (f == BlockFace.UP) out.add(n);
             } else if (Tag.WALL_HANGING_SIGNS.isTagged(n.getType())) {
                 BlockFace facing = n.getBlockData() instanceof Directional d ? d.getFacing() : BlockFace.NORTH;
                 // hangs between two blocks on its sides
-                if (f != BlockFace.UP && f != BlockFace.DOWN && f != facing && f != facing.getOppositeFace()) return true;
+                if (f != BlockFace.UP && f != BlockFace.DOWN && f != facing && f != facing.getOppositeFace()) out.add(n);
             } else {
                 BlockFace support = n.getBlockData() instanceof Directional d ? d.getFacing().getOppositeFace() : BlockFace.DOWN;
-                if (n.getRelative(support).equals(b)) return true;
+                if (n.getRelative(support).equals(b)) out.add(n);
             }
         }
-        return false;
+        return out;
     }
 
     private boolean protectedBlock(Block b) {
@@ -205,9 +208,12 @@ public final class QuestListener implements Listener {
     public void onBreak(BlockBreakEvent e) {
         Block b = e.getBlock();
         boolean sign = protectedSign(b);
-        if (!sign && !supportsProtected(b)) return;
+        java.util.List<Block> held = supportedSigns(b);
+        if (!sign && held.isEmpty()) return;
         Player p = e.getPlayer();
-        if (!p.hasPermission("questbook.editor")) {
+        var ed = plugin.editor();
+        // only editors may touch these blocks, and only those who own every quest that uses the sign
+        if (!p.hasPermission("questbook.editor") || (sign && !ed.maySignEdit(p, b)) || !held.stream().allMatch(s -> ed.maySignEdit(p, s))) {
             e.setCancelled(true);
             return;
         }

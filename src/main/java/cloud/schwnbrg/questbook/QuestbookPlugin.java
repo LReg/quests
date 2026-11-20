@@ -137,24 +137,38 @@ public final class QuestbookPlugin extends JavaPlugin {
         return out;
     }
 
-    /** /qe reload: config, messages and all quest YAML. */
-    public void reloadAll() {
+    /** Result of /qe reload: how many quests are loaded and what only changes after a restart. */
+    public record ReloadReport(int quests, java.util.List<String> needsRestart) {}
+
+    /** /qe reload: config, messages and all quest YAML. Runs on the main thread. */
+    public ReloadReport reloadAll() {
+        long previewInterval = getConfig().getLong("preview.interval_ticks", 10);
+        boolean advancementsOn = getConfig().getBoolean("advancements.enabled", true);
+        Map<String, Quest> before = new LinkedHashMap<>(quests.quests());
+
         reloadConfig();
         messages.load();
-        var old = new java.util.HashSet<>(quests.quests().keySet());
         quests.setQuests(loadQuests());
-        for (String id : old) if (quests.quest(id) == null) advancements.unregister(id);
+        for (String id : before.keySet()) if (quests.quest(id) == null) advancements.unregister(id);
         signs.rebuildIndex();
         for (Quest q : quests.quests().values()) if (!q.published()) advancements.unregister(q.id());
         advancements.registerAll(); // parents before children
         dialogs = createDialogs();
-        quests.reconcile(); // players mid-quest: clamp steps, drop vanished quests, resume newly published ones
+        quests.reconcile(before); // players mid-quest: clamp steps, stop drafts, drop vanished quests, resume newly published ones
+        editor.dropMissingQuests();
         for (Player p : Bukkit.getOnlinePlayers()) signs.refreshAll(p);
+
+        java.util.List<String> notes = new java.util.ArrayList<>();
+        if (getConfig().getLong("preview.interval_ticks", 10) != previewInterval) notes.add("preview.interval_ticks");
+        if (getConfig().getBoolean("advancements.enabled", true) != advancementsOn) notes.add("advancements.enabled");
+        var pending = advancements.pendingRestart();
+        if (!pending.isEmpty()) notes.add("advancements: " + String.join(", ", pending));
+        return new ReloadReport(quests.quests().size(), notes);
     }
 
     /** /qe stats: SQL runs async, the answer is sent on the main thread. */
     public void stats(Player p, String id) {
-        Quest q = quests.quest(id);
+        Quest q = editor.editable(p, id);
         if (q == null) {
             p.sendMessage(messages.get("editor-unknown-quest", "quest", Messages.esc(id)));
             return;
