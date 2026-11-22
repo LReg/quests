@@ -919,17 +919,12 @@ public final class Menus {
             List<String> condLore = new ArrayList<>();
             condLore.add(t("gui-cond-lore"));
             condLore.add("");
-            condLore.add(rule.cond() instanceof Cond.HasItem ? t("gui-cond-click-item") : t("gui-cond-click"));
+            condLore.add(t("gui-cond-click"));
             condLore.add(t("gui-cond-right"));
             menu.set(base, Menu.icon(condIcon(q, rule.cond()), colour(col) + t("gui-if", "cond", condText), condLore), c -> {
                 if (c.right()) {
                     editor.setRule(p, id, idx, ri, Cond.negate(rule.cond()), null);
                     again.run();
-                } else if (rule.cond() instanceof Cond.HasItem h) {
-                    openItemCond(p, h, nc -> {
-                        editor.setRule(p, id, idx, ri, nc, null);
-                        again.run();
-                    }, again);
                 } else {
                     openCondPicker(p, id, idx, 0, nc -> {
                         editor.setRule(p, id, idx, ri, nc, null);
@@ -1039,37 +1034,9 @@ public final class Menus {
         if (all.isEmpty()) menu.set(13, Menu.icon(Material.PAPER, t("gui-cond-none"), t("gui-cond-none-lore")), null);
         menu.set(45, Menu.icon(Material.ARROW, t("gui-back")), c -> back.run());
         if (pg > 0) menu.set(46, Menu.icon(Material.ARROW, t("gui-prev-page")), c -> openCondPicker(p, id, idx, pg - 1, onPick, back));
-        menu.set(48, Menu.icon(Material.CHEST, t("gui-cond-item"), t("gui-cond-item-lore")), c -> {
-            ItemStack hand = p.getInventory().getItemInMainHand();
-            if (hand.getType().isAir()) {
-                p.sendMessage(m().get("editor-hold-item"));
-                return;
-            }
-            openItemCond(p, new Cond.HasItem(hand.getType().getKey().getKey(), hand.getAmount(), false), onPick, back);
-        });
         menu.set(50, Menu.icon(Material.WRITABLE_BOOK, t("gui-cond-quest"), t("gui-cond-quest-lore")), c -> openQuestCond(p, id, onPick, back));
         if (pg < pages - 1) menu.set(52, Menu.icon(Material.ARROW, t("gui-next-page")), c -> openCondPicker(p, id, idx, pg + 1, onPick, back));
         menu.set(53, Menu.icon(Material.BARRIER, t("gui-close")), c -> p.closeInventory());
-        menu.open(p);
-    }
-
-    /** "Has an item": amount − / +. The items are only looked at, never taken. */
-    private void openItemCond(Player p, Cond.HasItem h, Consumer<Cond> onPick, Runnable back) {
-        Menu menu = new Menu(3, m().get("menu-item-title"));
-        Material mat = Material.matchMaterial(h.item());
-        menu.set(4, Menu.icon(mat == null || mat.isAir() ? Material.CHEST : mat, t("gui-item-name", "item", h.item().replace('_', ' '), "amount", String.valueOf(h.amount())),
-                t("gui-item-hand")), c -> {
-            ItemStack hand = p.getInventory().getItemInMainHand();
-            if (!hand.getType().isAir()) openItemCond(p, new Cond.HasItem(hand.getType().getKey().getKey(), h.amount(), h.not()), onPick, back);
-        });
-        menu.set(11, Menu.icon(Material.RED_STAINED_GLASS_PANE, t("gui-item-minus"), t("gui-shift-5")),
-                c -> openItemCond(p, new Cond.HasItem(h.item(), Math.max(1, h.amount() - c.amount()), h.not()), onPick, back));
-        menu.set(13, Menu.icon(Material.SLIME_BALL, t("gui-item-amount", "value", String.valueOf(h.amount()))), null);
-        menu.set(15, Menu.icon(Material.LIME_STAINED_GLASS_PANE, t("gui-item-plus"), t("gui-shift-5")),
-                c -> openItemCond(p, new Cond.HasItem(h.item(), Math.min(2304, h.amount() + c.amount()), h.not()), onPick, back));
-        menu.set(18, Menu.icon(Material.ARROW, t("gui-back")), c -> back.run());
-        menu.set(22, Menu.icon(Material.LIME_CONCRETE, t("gui-item-done")), c -> onPick.accept(h));
-        menu.set(26, Menu.icon(Material.BARRIER, t("gui-close")), c -> p.closeInventory());
         menu.open(p);
     }
 

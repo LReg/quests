@@ -977,6 +977,14 @@ public final class EditorService {
                 }
             }
         }
+        // "has an item" conditions are no longer offered (1.4); old ones still work, but should be replaced
+        for (int i = 0; i < q.steps().size(); i++) {
+            Step s = q.steps().get(i);
+            boolean item = s.rules().stream().anyMatch(r -> r.cond() instanceof Cond.HasItem)
+                    || s.textIf().stream().anyMatch(v -> v.cond() instanceof Cond.HasItem);
+            if (item) out.add("step " + (i + 1) + ": uses a 'has an item' condition, which is no longer offered; "
+                    + "it still works, but a WORLD CHOICE with a HAVE_ITEM option does the same and lets the player act");
+        }
         out.addAll(Validation.flowWarnings(q));
         return out;
     }
