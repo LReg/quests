@@ -35,6 +35,7 @@ tasks.test {
 }
 
 tasks.processResources {
+    inputs.property("version", project.version.toString())
     filesMatching("plugin.yml") {
         expand("version" to project.version, "apiVersion" to mcVersions.first())
     }
@@ -66,6 +67,8 @@ val versionJars = mcVersions.map { mc ->
     val resources = tasks.register<Copy>("processResources_$id") {
         from("src/main/resources")
         into(layout.buildDirectory.dir("resources/$id"))
+        // without this a build with only a new version reuses the old plugin.yml (a 1.4.0 jar said 1.3.1)
+        inputs.property("version", project.version.toString())
         filesMatching("plugin.yml") {
             expand("version" to project.version, "apiVersion" to mc)
         }

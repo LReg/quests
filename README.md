@@ -31,6 +31,8 @@ Summaries keep line breaks and can be 1000 characters long (600 in 1.2.0); all t
 
 **Upgrading from 1.1 or 1.2:** replace the jar. Quest files and the database need no changes: steps get hidden ids (`id: s1`, …) when a quest is next saved, and choices, paths and endings are stored in a new table `progress_extra`, so the old `progress` table is untouched and 1.1 can still read the database. New config keys and messages fall back to the built-in defaults until you add them. Going back to the 1.1 jar also works: quests with conditions run linearly there (unknown keys are logged), and quests with `CHOICE` or `WORLD CHOICE` steps load as drafts. Going back to 1.2.0 works the same way: quests with `HAVE_ITEM` or `PLACE` steps load as drafts there.
 
+**Fixed in 1.4.1:** start signs far away could stay blank after walking back to them; their text is now sent whenever the client has the sign's chunk.
+
 **Changes in 1.3 to know about when upgrading:** the player guide is on by default for quests from 1.1 (a 1.2.0 quest keeps its setting). Questbook never takes items any more: a 1.2.0 "has item" condition with `take: true` now only checks the item, and the server log warns about each one, so check those quests.
 
 ## Stats export and dashboard

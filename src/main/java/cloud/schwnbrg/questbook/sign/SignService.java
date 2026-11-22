@@ -194,8 +194,7 @@ public final class SignService {
         BlockRef r = q.startSign();
         World w = Bukkit.getWorld(r.world());
         if (w == null || p.getWorld() != w || !w.isChunkLoaded(r.x() >> 4, r.z() >> 4)) return;
-        double view = Bukkit.getViewDistance() * 16.0 + 16;
-        if (p.getLocation().distanceSquared(new org.bukkit.Location(w, r.x(), r.y(), r.z())) > view * view) return;
+        if (!seesChunkOf(p, r)) return; // not sent yet: onChunkSent refreshes it when it is
         if (!takeBudget(p)) {
             Bukkit.getScheduler().runTask(plugin, () -> refresh(p, questId));
             return;
@@ -214,6 +213,16 @@ public final class SignService {
         side.setGlowingText(st == SignState.AVAILABLE);
         side.setColor(st == SignState.COMPLETED ? DyeColor.GRAY : DyeColor.BLACK);
         p.sendBlockUpdate(b.getLocation(), sign);
+    }
+
+    /**
+     * True if the player's client has the chunk with this sign, so a sign packet would be shown. Asked of the client's
+     * chunks, never of a distance: chunks are sent in a circle with a margin, so a sign at the edge can be further away
+     * than any distance limit based on the view distance. Such a sign used to be skipped when its chunk arrived and
+     * stayed blank until the player rejoined.
+     */
+    static boolean seesChunkOf(Player p, BlockRef r) {
+        return p.isChunkSent(org.bukkit.Chunk.getChunkKey(r.x() >> 4, r.z() >> 4));
     }
 
     private List<String> lines(Player p, Quest q, SignState st) {
