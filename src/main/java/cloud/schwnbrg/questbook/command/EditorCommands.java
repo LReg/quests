@@ -129,6 +129,12 @@ public final class EditorCommands {
                 .then(Commands.argument("option", IntegerArgumentType.integer(1, 4))
                         .executes(c -> player(c, (p, x) -> plugin.quests().skip(p, i(x, "option"))))));
         qe.then(Commands.literal("map").then(id().executes(c -> player(c, (p, x) -> ed.printMap(p, s(x, "id"))))));
+        qe.then(Commands.literal("icon").then(id().then(Commands.argument("icon", StringArgumentType.word())
+                .suggests((c, b) -> {
+                    Quest.ICONS.forEach(b::suggest);
+                    return b.buildFuture();
+                })
+                .executes(c -> player(c, (p, x) -> ed.setIcon(p, s(x, "id"), s(x, "icon")))))));
         qe.then(Commands.literal("guide").then(id()
                 .then(Commands.literal("particles").then(Commands.argument("on", BoolArgumentType.bool())
                         .executes(c -> player(c, (p, x) -> ed.setGuide(p, s(x, "id"), BoolArgumentType.getBool(x, "on"), null)))))
@@ -259,6 +265,15 @@ public final class EditorCommands {
             String old = q.steps().get(idx).hint();
             plugin.dialogs().textInput(p, title("input-title-hint"), old == null ? "" : old, false, t -> ed.setHint(p, q.id(), idx, t), () -> { });
         })))));
+        // /qe step guide <id> <n> particles|compass on|off|quest
+        var stepGuide = n();
+        for (String part : List.of("particles", "compass")) {
+            stepGuide.then(Commands.literal(part)
+                    .then(Commands.literal("on").executes(c -> player(c, (p, x) -> ed.setStepGuide(p, s(x, "id"), i(x, "n") - 1, part, true))))
+                    .then(Commands.literal("off").executes(c -> player(c, (p, x) -> ed.setStepGuide(p, s(x, "id"), i(x, "n") - 1, part, false))))
+                    .then(Commands.literal("quest").executes(c -> player(c, (p, x) -> ed.setStepGuide(p, s(x, "id"), i(x, "n") - 1, part, null)))));
+        }
+        st.then(Commands.literal("guide").then(id().then(stepGuide)));
         st.then(Commands.literal("here").then(id().then(n().executes(c -> player(c, (p, x) -> ed.stepHere(p, s(x, "id"), i(x, "n") - 1, null)))
                 .then(Commands.argument("radius", IntegerArgumentType.integer(1, 64))
                         .executes(c -> player(c, (p, x) -> ed.stepHere(p, s(x, "id"), i(x, "n") - 1, i(x, "radius"))))))));

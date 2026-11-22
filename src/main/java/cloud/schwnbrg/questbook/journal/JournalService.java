@@ -139,7 +139,8 @@ public final class JournalService {
             body.addAll(chose);
         }
         // where to go, for quests whose editor turned the guide on
-        if (q.guide().particles() || q.guide().compass()) {
+        Quest.Guide guide = q.guideAt(idx);
+        if (guide.particles() || guide.compass()) {
             Location target = GuideService.nearest(p, GuideService.targets(s.trigger()));
             if (target != null) {
                 body.add("");
@@ -153,7 +154,7 @@ public final class JournalService {
         boolean armed = r != null && r.armed;
         boolean cont = s.trigger() instanceof Trigger.Continue && armed;
         List<Trigger.Option> buttons = armed && s.trigger() instanceof Trigger.Choice c ? c.options() : List.of();
-        boolean track = q.guide().compass() && !q.id().equals(d.tracked) && !GuideService.targets(s.trigger()).isEmpty();
+        boolean track = guide.compass() && !q.id().equals(d.tracked) && !GuideService.targets(s.trigger()).isEmpty();
         // trailer: blank + hint lines + blank + [Continue] / one line per button + [Track] + [Abandon]
         int trailer = 1 + (hasHint ? BookPaginator.wrap("Hint: " + plain(s.hint())).size() + 1 : 0) + (cont ? 1 : 0) + buttons.size()
                 + (track ? 1 : 0) + 1;

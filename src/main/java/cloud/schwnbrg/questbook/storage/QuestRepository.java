@@ -33,7 +33,7 @@ import org.bukkit.configuration.file.YamlConfiguration;
 public final class QuestRepository {
 
     private static final Set<String> QUEST_KEYS = Set.of("id", "title", "summary", "status", "author", "owner", "start_sign",
-            "requires", "requires_endings", "repeatable", "repeat_cooldown_seconds", "guide", "steps");
+            "requires", "requires_endings", "repeatable", "repeat_cooldown_seconds", "guide", "icon", "steps");
 
     private final Path dir;
     private final Logger log;
@@ -76,7 +76,7 @@ public final class QuestRepository {
         return out;
     }
 
-    private static final Set<String> STEP_KEYS = Set.of("id", "text", "text_if", "after", "trigger", "hint", "conditions", "next", "ending");
+    private static final Set<String> STEP_KEYS = Set.of("id", "text", "text_if", "after", "trigger", "hint", "conditions", "next", "ending", "guide");
     private static final Map<String, Set<String>> TRIGGER_KEYS = Map.ofEntries(
             Map.entry("CONTINUE", Set.of("type")),
             Map.entry("REACH", Set.of("type", "world", "x", "y", "z", "radius")),
@@ -120,7 +120,16 @@ public final class QuestRepository {
                 : new Quest.Guide(g.getBoolean("particles", Quest.Guide.DEFAULT.particles()), g.getBoolean("compass", Quest.Guide.DEFAULT.compass()));
         return new Quest(id, c.getString("title", id), c.getString("summary", ""), status,
                 block(c.getConfigurationSection("start_sign")), List.copyOf(c.getStringList("requires")), reqEnd,
-                c.getBoolean("repeatable"), c.getInt("repeat_cooldown_seconds"), c.getString("author", ""), c.getString("owner", ""), steps, guide);
+                c.getBoolean("repeatable"), c.getInt("repeat_cooldown_seconds"), c.getString("author", ""), c.getString("owner", ""), steps, guide, icon(c.getString("icon"), fileName));
+    }
+
+    /** The advancement icon; an item that does not exist is only warned about, the quest keeps the book. */
+    private String icon(String raw, String fileName) {
+        if (raw == null || raw.isBlank()) return null;
+        String item = Validation.itemId(raw.strip());
+        if (item != null) return item;
+        log.warning(fileName + ": icon '" + raw + "' is not an item, the quest shows the book");
+        return null;
     }
 
     private static List<String> lines(Object t) {
@@ -169,7 +178,29 @@ public final class QuestRepository {
         if (nx != null) next = parseTarget(String.valueOf(nx), ending == null ? null : String.valueOf(ending), where + " next", problems);
         else if (ending != null) next = Target.end(String.valueOf(ending));
         return new Step(uid == null ? null : String.valueOf(uid), lines(m.get("text")), parseTrigger(section(m.get("trigger")), where, problems),
-                h == null ? null : String.valueOf(h), lines(m.get("after")), rules, next, variants);
+                h == null ? null : String.valueOf(h), lines(m.get("after")), rules, next, variants, parseGuideOverride(m.get("guide"), where));
+    }
+
+    /** A step's {@code guide: {particles: false, compass: true}}; a missing part follows the quest. */
+    private Step.GuideOverride parseGuideOverride(Object raw, String where) {
+        if (raw == null) return null;
+        if (!(raw instanceof Map<?, ?> g)) {
+            log.warning(where + ": 'guide' must be a section with particles and/or compass, ignored");
+            return null;
+        }
+        for (Object k : g.keySet()) {
+            if (!"particles".equals(k) && !"compass".equals(k)) log.warning(where + ": unknown key '" + k + "' in guide");
+        }
+        return new Step.GuideOverride(bool(g.get("particles"), where + " guide particles"), bool(g.get("compass"), where + " guide compass"));
+    }
+
+    private Boolean bool(Object v, String where) {
+        if (v == null || v instanceof Boolean) return (Boolean) v;
+        String s = String.valueOf(v).strip().toLowerCase(java.util.Locale.ROOT);
+        if (s.equals("true") || s.equals("on")) return true;
+        if (s.equals("false") || s.equals("off")) return false;
+        log.warning(where + ": '" + v + "' is not true or false, the quest's setting is used");
+        return null;
     }
 
     private Target parseTarget(String to, String ending, String where, List<String> problems) {
@@ -315,6 +346,7 @@ public final class QuestRepository {
         if (!q.requireEndings().isEmpty()) y.set("requires_endings", new LinkedHashMap<>(q.requireEndings()));
         y.set("repeatable", q.repeatable());
         y.set("repeat_cooldown_seconds", q.repeatCooldownSeconds());
+        if (q.icon() != null) y.set("icon", q.icon());
         // always written, so a quest keeps its setting if the default changes again
         Map<String, Object> g = new LinkedHashMap<>();
         g.put("particles", q.guide().particles());
@@ -338,6 +370,12 @@ public final class QuestRepository {
             if (!s.after().isEmpty()) m.put("after", s.after());
             m.put("trigger", triggerMap(s.trigger()));
             if (s.hint() != null && !s.hint().isBlank()) m.put("hint", s.hint());
+            if (s.guide() != null) {
+                Map<String, Object> sg = new LinkedHashMap<>();
+                if (s.guide().particles() != null) sg.put("particles", s.guide().particles());
+                if (s.guide().compass() != null) sg.put("compass", s.guide().compass());
+                m.put("guide", sg);
+            }
             if (!s.rules().isEmpty()) {
                 List<Map<String, Object>> rs = new ArrayList<>();
                 for (Rule r : s.rules()) {

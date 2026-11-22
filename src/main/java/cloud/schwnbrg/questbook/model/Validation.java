@@ -137,6 +137,15 @@ public final class Validation {
         return m != null && registry(() -> !m.isAir() && m.isItem(), !m.name().endsWith("AIR"));
     }
 
+    /**
+     * The item's real id ("heart_of_the_sea") for anything {@link #validItem} accepts ("Heart of the Sea",
+     * "minecraft:HEART_OF_THE_SEA"), or null. Only the id is safe to put into JSON such as an advancement icon.
+     */
+    public static String itemId(String item) {
+        if (!validItem(item)) return null;
+        return org.bukkit.Material.matchMaterial(item).name().toLowerCase(java.util.Locale.ROOT);
+    }
+
     /** An item that places a block. */
     public static boolean validBlock(String block) {
         org.bukkit.Material m = block == null ? null : org.bukkit.Material.matchMaterial(block);

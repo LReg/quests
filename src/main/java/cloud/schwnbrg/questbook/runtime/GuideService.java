@@ -29,9 +29,6 @@ import org.bukkit.entity.Player;
 public final class GuideService {
 
     private static final Particle.DustOptions DUST = new Particle.DustOptions(Color.fromRGB(255, 215, 90), 1.1f);
-    /** Characters of the compass strip; it covers 180° of view. */
-    private static final int HALF = 22;
-    private static final double DEG_PER_CHAR = 90.0 / HALF;
 
     private final QuestbookPlugin plugin;
     private final QuestService quests;
@@ -53,12 +50,15 @@ public final class GuideService {
     public void track(Player p, String questId) {
         PlayerData d = quests.data(p);
         Quest q = quests.quest(questId);
-        if (d == null || q == null || quests.realRun(p, questId) == null) {
+        Run run = q == null ? null : quests.realRun(p, questId);
+        if (d == null || run == null) {
             p.sendMessage(m.get("not-active"));
             return;
         }
         d.tracked = questId;
-        p.sendMessage(m.get(q.guide().compass() ? "tracking" : "tracking-no-compass", "title", q.title()));
+        boolean here = q.guideAt(run.step).compass();
+        boolean anywhere = here || java.util.stream.IntStream.range(0, q.steps().size()).anyMatch(i -> q.guideAt(i).compass());
+        p.sendMessage(m.get(here ? "tracking" : anywhere ? "tracking-not-this-step" : "tracking-no-compass", "title", q.title()));
         tick(p);
     }
 
@@ -80,8 +80,9 @@ public final class GuideService {
             Quest q = quests.quest(r.questId);
             if (q == null || !r.armed || r.step >= q.steps().size()) continue;
             Step s = q.steps().get(r.step);
-            if (q.guide().particles()) for (Trigger t : Trigger.leaves(s.trigger())) PreviewService.draw(p, t, DUST, max);
-            if (!q.guide().compass()) continue;
+            Quest.Guide guide = q.guideAt(r.step);
+            if (guide.particles()) for (Trigger t : Trigger.leaves(s.trigger())) PreviewService.draw(p, t, DUST, max);
+            if (!guide.compass()) continue;
             boolean tracked = d != null && r.questId.equals(d.tracked);
             if (compassRun == null || tracked || r.test) {
                 compassRun = r;
@@ -145,11 +146,6 @@ public final class GuideService {
         return best != null ? best : targets.isEmpty() ? null : targets.get(0);
     }
 
-    /** Minecraft yaw from the player towards a point: 0 = south, 90 = west, 180 = north, 270 = east. */
-    static double bearing(double dx, double dz) {
-        return Math.toDegrees(Math.atan2(-dx, dz));
-    }
-
     /** "north-east" etc., for the journal. */
     public String direction(Player p, Location target) {
         if (!target.getWorld().equals(p.getWorld())) return m.raw("guide-other-world", "world", target.getWorld().getName());
@@ -157,7 +153,7 @@ public final class GuideService {
         int dist = (int) Math.round(Math.sqrt(dx * dx + dz * dz));
         if (dist < 4) return m.raw("guide-here");
         String[] names = {"s", "sw", "w", "nw", "n", "ne", "e", "se"};
-        int i = (int) Math.floorMod(Math.round(bearing(dx, dz) / 45.0), 8);
+        int i = (int) Math.floorMod(Math.round(CompassStrip.bearing(dx, dz) / 45.0), 8);
         return m.raw("guide-direction", "distance", String.valueOf(dist), "dir", m.raw("guide-dir-" + names[i]));
     }
 
@@ -166,40 +162,11 @@ public final class GuideService {
         if (!target.getWorld().equals(p.getWorld())) {
             return m.get("guide-bar-other-world", "title", q.title(), "world", target.getWorld().getName());
         }
-        double yaw = p.getLocation().getYaw();
-        double dx = target.getX() - p.getLocation().getX(), dz = target.getZ() - p.getLocation().getZ();
+        Location at = p.getLocation();
+        double dx = target.getX() - at.getX(), dz = target.getZ() - at.getZ(), dy = target.getY() - at.getY();
         double dist = Math.sqrt(dx * dx + dz * dz);
-        double rel = wrap(bearing(dx, dz) - yaw);
-        int marker = (int) Math.round(rel / DEG_PER_CHAR);
-        StringBuilder sb = new StringBuilder();
-        for (int k = -HALF; k <= HALF; k++) {
-            if (k == marker || (k == -HALF && marker < -HALF) || (k == HALF && marker > HALF)) {
-                sb.append(marker < -HALF ? "<gold>«</gold>" : marker > HALF ? "<gold>»</gold>" : "<gold><bold>◆</bold></gold>");
-                continue;
-            }
-            double a = wrap(yaw + k * DEG_PER_CHAR);
-            String letter = cardinal(a);
-            if (letter != null) sb.append("<white><bold>").append(letter).append("</bold></white>");
-            else sb.append(Math.floorMod(Math.round(a), 45) < DEG_PER_CHAR ? "<gray>|</gray>" : "<dark_gray>·</dark_gray>");
-        }
+        String strip = CompassStrip.build(at.getYaw(), dx, dz, dy);
         String distance = dist < 4 ? m.raw("guide-bar-here") : m.raw("guide-bar-distance", "distance", String.valueOf(Math.round(dist)));
-        return m.get("guide-bar", "strip", sb.toString(), "distance", distance, "title", q.title());
-    }
-
-    /** N/E/S/W when this angle is the closest character to one of them. */
-    private static String cardinal(double a) {
-        String[] letters = {"S", "W", "N", "E"};
-        for (int i = 0; i < 4; i++) {
-            if (Math.abs(wrap(a - i * 90)) < DEG_PER_CHAR / 2) return letters[i];
-        }
-        return null;
-    }
-
-    /** Into -180..180. */
-    static double wrap(double a) {
-        a = a % 360;
-        if (a > 180) a -= 360;
-        if (a < -180) a += 360;
-        return a;
+        return m.get("guide-bar", "strip", strip, "distance", distance, "title", q.title());
     }
 }

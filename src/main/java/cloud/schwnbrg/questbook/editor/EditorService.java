@@ -180,11 +180,12 @@ public final class EditorService {
         if (before.published() || after.published()) plugin.signs().refreshForAll(after.id());
     }
 
-    /** Title, summary, parent or frame (goal from 5 steps) changed, or the quest has just been published. */
+    /** Title, summary, icon, parent or frame (goal from 5 steps) changed, or the quest has just been published. */
     private static boolean advancementChanged(Quest before, Quest after) {
         return !before.published()
                 || !before.title().equals(after.title())
                 || !before.summary().equals(after.summary())
+                || !before.iconOrDefault().equals(after.iconOrDefault())
                 || !before.requires().equals(after.requires())
                 || (before.steps().size() >= 5) != (after.steps().size() >= 5);
     }
@@ -439,6 +440,17 @@ public final class EditorService {
     public void setAfter(Player p, String id, int i, String text) {
         List<String> lines = textLines(text);
         editStep(p, id, i, false, s -> s.withAfter(lines));
+    }
+
+    /**
+     * Overrides the quest's guide on one step. {@code part} is "particles" or "compass"; {@code value} true/false
+     * overrides it, null makes the step follow the quest again.
+     */
+    public void setStepGuide(Player p, String id, int i, String part, Boolean value) {
+        editStep(p, id, i, false, s -> {
+            Step.GuideOverride g = s.guideOverride();
+            return s.withGuide(part.equals("particles") ? new Step.GuideOverride(value, g.compass()) : new Step.GuideOverride(g.particles(), value));
+        });
     }
 
     public void setHint(Player p, String id, int i, String hint) {
@@ -836,6 +848,19 @@ public final class EditorService {
     }
 
     // ---------- guide, required endings ----------
+
+    /** Sets the quest's icon in the advancement tab (one of {@link Quest#ICONS}, or any item). */
+    public void setIcon(Player p, String id, String icon) {
+        String item = Validation.itemId(icon);
+        if (item == null) {
+            p.sendMessage(m.get("editor-icon-unknown", "icon", Messages.esc(icon)));
+            return;
+        }
+        Quest res = mutate(p, id, false, q -> q.withIcon(item));
+        if (res == null) return;
+        p.sendMessage(m.get("editor-saved"));
+        if (res.published() && plugin.advancements().pendingRestart().contains(id)) p.sendMessage(m.get("editor-icon-restart"));
+    }
 
     /** Turns the player guide on or off for a quest (null keeps that part). */
     public void setGuide(Player p, String id, Boolean particles, Boolean compass) {

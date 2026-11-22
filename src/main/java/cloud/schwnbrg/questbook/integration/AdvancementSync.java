@@ -123,13 +123,27 @@ public final class AdvancementSync {
         if (!enabled()) return;
         Set<String> done = new HashSet<>();
         loadWithParent(quest, done);
+        // quests below it that hung at the root while it was not published belong under it again
+        reloadChildren(quest.id());
+    }
+
+    /** Rewrites the published quests directly below {@code questId}: their parent in the tab may have changed. */
+    private void reloadChildren(String questId) {
+        for (Quest child : plugin.quests().quests().values()) {
+            if (child.published() && !child.id().equals(questId) && !child.requires().isEmpty() && child.requires().getFirst().equals(questId)) load(child);
+        }
     }
 
     private String json(Quest quest) {
         Quest parentQuest = parentOf(quest);
-        String parent = parentQuest == null ? key(ROOT).asString() : questKey(parentQuest).asString();
+        return json(quest, parentQuest == null ? key(ROOT).asString() : questKey(parentQuest).asString());
+    }
+
+    /** The advancement of {@code quest} under {@code parent} ("questbook:root" or "questbook:quest/&lt;id&gt;"). */
+    static String json(Quest quest, String parent) {
         String frame = quest.steps().size() >= 5 ? "goal" : "task";
-        return "{\"parent\":" + q(parent) + ",\"display\":{\"icon\":{\"id\":\"minecraft:written_book\"},\"title\":" + component(plain(quest.title()))
+        // the default icon gives exactly the JSON of 1.4, so the hash matches and nothing counts as changed
+        return "{\"parent\":" + q(parent) + ",\"display\":{\"icon\":{\"id\":" + q("minecraft:" + quest.iconOrDefault()) + "},\"title\":" + component(plain(quest.title()))
                 + ",\"description\":" + component(description(quest)) + ",\"frame\":\"" + frame
                 + "\",\"show_toast\":true,\"announce_to_chat\":false,\"hidden\":true},\"criteria\":{\"" + CRITERION
                 + "\":{\"trigger\":\"minecraft:impossible\"}}}";
@@ -160,8 +174,10 @@ public final class AdvancementSync {
                 setHash(quest.id(), hash);
                 pendingRestart.remove(quest.id());
             } else if (!hash.equals(hashes().getString(quest.id()))) {
-                // loaded already with other content: it cannot be replaced while running. Delete its file so the next start loads this one.
-                Bukkit.getUnsafe().removeAdvancement(k);
+                // loaded already with other content: it cannot be replaced while running. Its file gets the new content,
+                // so the next start loads this one. Deleting the file instead (as before 1.5) left the quests below it
+                // without a parent on the next start: "Couldn't load advancements".
+                if (!overwrite(Bukkit.getWorlds().getFirst().getWorldFolder(), k, json)) Bukkit.getUnsafe().removeAdvancement(k);
                 setHash(quest.id(), hash);
                 pendingRestart.add(quest.id());
                 plugin.getLogger().info("Advancement of " + quest.id() + " changed: it is updated after the next server restart.");
@@ -171,7 +187,32 @@ public final class AdvancementSync {
         }
     }
 
-    /** The advancement stays in the running game (players keep their toast) and is gone after the next restart. */
+    /**
+     * Writes {@code json} over the file Paper keeps a runtime advancement in ({@code <world>/datapacks/bukkit/data/
+     * <namespace>/advancement/<key>.json}; "advancements" in older layouts). Only an existing file is overwritten, so a
+     * layout we do not know is never guessed at. False if there was no such file or it could not be written.
+     */
+    static boolean overwrite(File worldFolder, NamespacedKey key, String json) {
+        for (String dir : new String[] {"advancement", "advancements"}) {
+            File f = new File(worldFolder, "datapacks/bukkit/data/" + key.getNamespace() + "/" + dir + "/" + key.getKey() + ".json");
+            if (!f.isFile()) continue;
+            try {
+                File tmp = new File(f.getPath() + ".tmp");
+                java.nio.file.Files.writeString(tmp.toPath(), json);
+                java.nio.file.Files.move(tmp.toPath(), f.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                return true;
+            } catch (IOException e) {
+                return false;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * The advancement stays in the running game (players keep their toast) and is gone after the next restart. The
+     * published quests directly below it move up to the root on that restart, so their files are rewritten now; a file
+     * still naming this one as parent would not load.
+     */
     public void unregister(String questId) {
         if (!enabled()) return;
         try {
@@ -181,6 +222,7 @@ public final class AdvancementSync {
         } catch (RuntimeException | LinkageError e) {
             plugin.getLogger().warning("Could not remove advancement " + questId + ": " + e);
         }
+        reloadChildren(questId);
     }
 
     public void grant(Player p, Quest quest) {

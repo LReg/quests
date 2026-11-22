@@ -20,7 +20,21 @@ public record Quest(
         String author,
         String owner,
         List<Step> steps,
-        Guide guide) {
+        Guide guide,
+        String icon) {
+
+    /** The advancement icon a quest has when it picked none: the book every quest had before 1.5. */
+    public static final String DEFAULT_ICON = "written_book";
+
+    /**
+     * The icons the editor offers for the advancement tab, so quests can be told apart. A hand-written file may name
+     * any other item.
+     */
+    public static final List<String> ICONS = List.of(
+            "written_book", "compass", "filled_map", "iron_sword", "bow", "shield",
+            "diamond", "emerald", "gold_ingot", "iron_pickaxe", "wheat", "cake",
+            "oak_sapling", "poppy", "lantern", "campfire", "bell", "chest",
+            "ender_eye", "skeleton_skull", "heart_of_the_sea", "nether_star", "fishing_rod", "amethyst_shard");
 
     /**
      * Player guidance the editor turns on per quest: {@code particles} shows where the current step wants the player
@@ -63,7 +77,28 @@ public record Quest(
         requireEndings = Map.copyOf(re);
         steps = withIds(steps == null ? List.of() : steps);
         guide = guide == null ? Guide.DEFAULT : guide;
+        icon = normalIcon(icon);
     }
+
+    /** A quest with the default icon. */
+    public Quest(String id, String title, String summary, QuestStatus status, BlockRef startSign, List<String> requires,
+                 Map<String, String> requireEndings, boolean repeatable, int repeatCooldownSeconds, String author, String owner,
+                 List<Step> steps, Guide guide) {
+        this(id, title, summary, status, startSign, requires, requireEndings, repeatable, repeatCooldownSeconds, author, owner, steps, guide, null);
+    }
+
+    /** "Minecraft:Compass " becomes "compass"; blank and the default become null, so a quest without a choice writes nothing. */
+    static String normalIcon(String icon) {
+        if (icon == null) return null;
+        String s = icon.strip().toLowerCase(java.util.Locale.ROOT);
+        if (s.startsWith("minecraft:")) s = s.substring("minecraft:".length());
+        return s.isEmpty() || s.equals(DEFAULT_ICON) ? null : s;
+    }
+
+    /** The item id shown in the advancement tab. */
+    public String iconOrDefault() { return icon == null ? DEFAULT_ICON : icon; }
+
+    public Quest withIcon(String v) { return new Quest(id, title, summary, status, startSign, requires, requireEndings, repeatable, repeatCooldownSeconds, author, owner, steps, guide, v); }
 
     private static List<Step> withIds(List<Step> steps) {
         int max = 0;
@@ -92,7 +127,7 @@ public record Quest(
         }
     }
 
-    public Quest withOwner(String v) { return new Quest(id, title, summary, status, startSign, requires, requireEndings, repeatable, repeatCooldownSeconds, author, v, steps, guide); }
+    public Quest withOwner(String v) { return new Quest(id, title, summary, status, startSign, requires, requireEndings, repeatable, repeatCooldownSeconds, author, v, steps, guide, icon); }
 
     public static Quest draft(String id, String title, String author) {
         return new Quest(id, title, "", QuestStatus.DRAFT, null, List.of(), false, 0, author, "", List.of());
@@ -100,15 +135,20 @@ public record Quest(
 
     public boolean published() { return status == QuestStatus.PUBLISHED; }
 
-    public Quest withTitle(String v) { return new Quest(id, v, summary, status, startSign, requires, requireEndings, repeatable, repeatCooldownSeconds, author, owner, steps, guide); }
-    public Quest withSummary(String v) { return new Quest(id, title, v, status, startSign, requires, requireEndings, repeatable, repeatCooldownSeconds, author, owner, steps, guide); }
-    public Quest withStatus(QuestStatus v) { return new Quest(id, title, summary, v, startSign, requires, requireEndings, repeatable, repeatCooldownSeconds, author, owner, steps, guide); }
-    public Quest withStartSign(BlockRef v) { return new Quest(id, title, summary, status, v, requires, requireEndings, repeatable, repeatCooldownSeconds, author, owner, steps, guide); }
-    public Quest withRequires(List<String> v) { return new Quest(id, title, summary, status, startSign, List.copyOf(v), requireEndings, repeatable, repeatCooldownSeconds, author, owner, steps, guide); }
-    public Quest withRequireEndings(Map<String, String> v) { return new Quest(id, title, summary, status, startSign, requires, v, repeatable, repeatCooldownSeconds, author, owner, steps, guide); }
-    public Quest withRepeatable(boolean r, int cooldown) { return new Quest(id, title, summary, status, startSign, requires, requireEndings, r, cooldown, author, owner, steps, guide); }
-    public Quest withGuide(Guide v) { return new Quest(id, title, summary, status, startSign, requires, requireEndings, repeatable, repeatCooldownSeconds, author, owner, steps, v); }
-    public Quest withSteps(List<Step> v) { return new Quest(id, title, summary, status, startSign, requires, requireEndings, repeatable, repeatCooldownSeconds, author, owner, List.copyOf(v), guide); }
+    public Quest withTitle(String v) { return new Quest(id, v, summary, status, startSign, requires, requireEndings, repeatable, repeatCooldownSeconds, author, owner, steps, guide, icon); }
+    public Quest withSummary(String v) { return new Quest(id, title, v, status, startSign, requires, requireEndings, repeatable, repeatCooldownSeconds, author, owner, steps, guide, icon); }
+    public Quest withStatus(QuestStatus v) { return new Quest(id, title, summary, v, startSign, requires, requireEndings, repeatable, repeatCooldownSeconds, author, owner, steps, guide, icon); }
+    public Quest withStartSign(BlockRef v) { return new Quest(id, title, summary, status, v, requires, requireEndings, repeatable, repeatCooldownSeconds, author, owner, steps, guide, icon); }
+    public Quest withRequires(List<String> v) { return new Quest(id, title, summary, status, startSign, List.copyOf(v), requireEndings, repeatable, repeatCooldownSeconds, author, owner, steps, guide, icon); }
+    public Quest withRequireEndings(Map<String, String> v) { return new Quest(id, title, summary, status, startSign, requires, v, repeatable, repeatCooldownSeconds, author, owner, steps, guide, icon); }
+    public Quest withRepeatable(boolean r, int cooldown) { return new Quest(id, title, summary, status, startSign, requires, requireEndings, r, cooldown, author, owner, steps, guide, icon); }
+    /** The guide a player gets on step {@code i}: the quest's, with that step's override on top. */
+    public Guide guideAt(int i) {
+        return i < 0 || i >= steps.size() ? guide : steps.get(i).guideOverride().apply(guide);
+    }
+
+    public Quest withGuide(Guide v) { return new Quest(id, title, summary, status, startSign, requires, requireEndings, repeatable, repeatCooldownSeconds, author, owner, steps, v, icon); }
+    public Quest withSteps(List<Step> v) { return new Quest(id, title, summary, status, startSign, requires, requireEndings, repeatable, repeatCooldownSeconds, author, owner, List.copyOf(v), guide, icon); }
 
     public Quest withStep(int i, Step s) {
         List<Step> l = new ArrayList<>(steps);

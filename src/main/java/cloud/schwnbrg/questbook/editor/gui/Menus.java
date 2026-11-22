@@ -206,6 +206,8 @@ public final class Menus {
             reqLore.add(e == null ? t("gui-requires-entry", "id", r) : t("gui-requires-entry-ending", "id", r, "ending", esc(Validation.plain(e))));
         }
         menu.set(3, Menu.icon(Material.LEAD, t("gui-requires"), reqLore), c -> openRequires(p, id));
+        menu.set(4, Menu.icon(itemIcon(q.iconOrDefault()), t("gui-icon"), "<gray>" + pretty(q.iconOrDefault()), "", t("gui-icon-lore"),
+                t("gui-click-edit-short")), c -> openIcons(p, id, page));
         menu.set(5, Menu.icon(q.guide().particles() || q.guide().compass() ? Material.RECOVERY_COMPASS : Material.GRAY_DYE, t("gui-guide"),
                 t("gui-guide-lore"), "",
                 t("gui-guide-particles", "state", t(q.guide().particles() ? "gui-on" : "gui-off")),
@@ -479,8 +481,31 @@ public final class Menus {
             if (tq != null) plugin.quests().startTest(p, tq);
         });
         menu.set(49, Menu.icon(Material.FILLED_MAP, t("gui-map")), c -> openMap(p, id, Math.max(0, idx - 1)));
+        menu.set(51, stepGuideIcon(q, idx), c -> {
+            Step.GuideOverride g = st.guideOverride();
+            if (c.right()) editor.setStepGuide(p, id, idx, "compass", Step.GuideOverride.next(g.compass()));
+            else editor.setStepGuide(p, id, idx, "particles", Step.GuideOverride.next(g.particles()));
+            again.run();
+        });
         menu.set(53, Menu.icon(Material.BARRIER, t("gui-close")), c -> p.closeInventory());
         menu.open(p);
+    }
+
+    private ItemStack stepGuideIcon(Quest q, int idx) {
+        Step.GuideOverride g = q.steps().get(idx).guideOverride();
+        Quest.Guide eff = q.guideAt(idx);
+        ItemStack icon = Menu.icon(eff.particles() || eff.compass() ? Material.RECOVERY_COMPASS : Material.GRAY_DYE, t("gui-step-guide"),
+                t("gui-step-guide-lore"), "",
+                t("gui-guide-particles", "state", guideState(g.particles(), q.guide().particles())),
+                t("gui-guide-compass", "state", guideState(g.compass(), q.guide().compass())), "",
+                t("gui-step-guide-left"), t("gui-step-guide-right"));
+        return g.isNone() ? icon : glow(icon);
+    }
+
+    private String guideState(Boolean override, boolean quest) {
+        String questState = t(quest ? "gui-on" : "gui-off");
+        return override == null ? t("gui-step-guide-as-quest", "state", questState)
+                : t("gui-step-guide-this-step", "state", t(override ? "gui-on" : "gui-off"));
     }
 
     /**
@@ -644,6 +669,28 @@ public final class Menus {
             }
             case Trigger.Continue c -> { }
         }
+    }
+
+    /** The 24 advancement icons; the current one glows. A hand-written icon outside the list shows in the corner. */
+    public void openIcons(Player p, String id, int returnPage) {
+        Quest q = editor.editable(p, id);
+        if (q == null) return;
+        Menu menu = new Menu(4, m().get("menu-icon-title"));
+        String current = q.iconOrDefault();
+        for (int i = 0; i < Quest.ICONS.size(); i++) {
+            String icon = Quest.ICONS.get(i);
+            ItemStack it = Menu.icon(itemIcon(icon), "<white>" + pretty(icon), icon.equals(current) ? t("gui-kill-selected") : t("gui-icon-pick"));
+            menu.set(i, icon.equals(current) ? glow(it) : it, c -> {
+                editor.setIcon(p, id, icon);
+                openQuest(p, id, returnPage);
+            });
+        }
+        if (!Quest.ICONS.contains(current)) {
+            menu.set(31, glow(Menu.icon(itemIcon(current), "<white>" + pretty(current), t("gui-kill-selected"), t("gui-icon-own"))), null);
+        }
+        menu.set(27, Menu.icon(Material.ARROW, t("gui-back")), c -> openQuest(p, id, returnPage));
+        menu.set(35, Menu.icon(Material.BARRIER, t("gui-close")), c -> p.closeInventory());
+        menu.open(p);
     }
 
     /** The item itself as the icon, a barrier for an unknown name. */
