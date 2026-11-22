@@ -8,7 +8,8 @@ import org.bukkit.NamespacedKey;
 import org.bukkit.World;
 
 public sealed interface Trigger permits Trigger.Continue, Trigger.Reach, Trigger.Region, Trigger.SignClick,
-        Trigger.Interact, Trigger.Answer, Trigger.Dimension, Trigger.AdvancementDone, Trigger.Kill, Trigger.Choice, Trigger.FirstOf {
+        Trigger.Interact, Trigger.Answer, Trigger.Dimension, Trigger.AdvancementDone, Trigger.Kill, Trigger.HaveItem, Trigger.Place,
+        Trigger.Choice, Trigger.FirstOf {
 
     String type();
 
@@ -91,6 +92,26 @@ public sealed interface Trigger permits Trigger.Continue, Trigger.Reach, Trigger
         }
     }
 
+    /**
+     * Carry {@code amount} of an item (storage slots and off hand; not inside shulker boxes or bundles). Checked when the
+     * step starts and whenever the inventory may have changed. The items are only looked at,
+     * never taken. {@code item} is a lowercase material key such as "wheat".
+     */
+    record HaveItem(String item, int amount) implements Trigger {
+        public String type() { return "HAVE_ITEM"; }
+    }
+
+    /**
+     * Place {@code amount} blocks of a type ({@code block} is the item the player places, such as "torch", so a wall torch
+     * counts as a torch), anywhere or, with {@code area} set, inside that box (set up like a REGION trigger). Each spot
+     * counts once, so breaking and placing again in the same place does not add up. Counts are kept in memory per run.
+     */
+    record Place(String block, int amount, Region area) implements Trigger {
+        public String type() { return "PLACE"; }
+
+        public Place withArea(Region a) { return new Place(block, amount, a); }
+    }
+
     /** A button of a CHOICE step. {@code id} is hidden and stable ("o2"), so renaming the label keeps conditions working. */
     record Option(String id, String label) {}
 
@@ -150,9 +171,9 @@ public sealed interface Trigger permits Trigger.Continue, Trigger.Reach, Trigger
     }
 
     /** Trigger types a WORLD CHOICE option may use: things that happen in the world, no buttons and no nesting. */
-    List<String> WORLD_TYPES = List.of("REACH", "REGION", "SIGN", "INTERACT", "DIMENSION", "ADVANCEMENT", "KILL");
+    List<String> WORLD_TYPES = List.of("REACH", "REGION", "SIGN", "INTERACT", "DIMENSION", "ADVANCEMENT", "KILL", "HAVE_ITEM", "PLACE");
 
-    List<String> TYPES = List.of("CONTINUE", "REACH", "REGION", "SIGN", "INTERACT", "ANSWER", "DIMENSION", "ADVANCEMENT", "KILL",
+    List<String> TYPES = List.of("CONTINUE", "REACH", "REGION", "SIGN", "INTERACT", "ANSWER", "DIMENSION", "ADVANCEMENT", "KILL", "HAVE_ITEM", "PLACE",
             "CHOICE", "FIRST_OF");
 
     /** The triggers that actually wait for something: the trigger itself, or the options of a WORLD CHOICE. */
@@ -182,6 +203,8 @@ public sealed interface Trigger permits Trigger.Continue, Trigger.Reach, Trigger
             case "DIMENSION" -> new Dimension(World.Environment.NETHER);
             case "ADVANCEMENT" -> new AdvancementDone(NamespacedKey.minecraft("story/root"));
             case "KILL" -> new Kill("ANY", 5);
+            case "HAVE_ITEM" -> new HaveItem("wheat", 16);
+            case "PLACE" -> new Place("torch", 1, null);
             case "CHOICE" -> new Choice(List.of(new Option(null, "Yes"), new Option(null, "No")));
             case "FIRST_OF" -> new FirstOf(List.of());
             default -> new Continue();

@@ -519,16 +519,18 @@ public final class EditorService {
      */
     public void setCorner(Player p, String id, int i, int opt, boolean first) {
         Location l = p.getLocation();
-        editTrigger(p, id, i, opt, false, tr -> {
-            int gy = l.getBlockY(); // feet level, the same coordinate Region.contains() compares
-            if (!(tr instanceof Trigger.Region t)) {
-                return new Trigger.Region(l.getWorld().getName(), l.getBlockX(), l.getBlockZ(), l.getBlockX(), l.getBlockZ(), gy, 4);
-            }
-            int x1 = first ? l.getBlockX() : t.x1(), z1 = first ? l.getBlockZ() : t.z1();
-            int x2 = first ? t.x2() : l.getBlockX(), z2 = first ? t.z2() : l.getBlockZ();
-            int base = first ? gy : Math.min(t.baseY(), gy);
-            return new Trigger.Region(l.getWorld().getName(), x1, z1, x2, z2, base, t.height());
-        });
+        // a REGION trigger's box, or the area of a PLACE trigger: the same tools
+        editTrigger(p, id, i, opt, false, tr -> tr instanceof Trigger.Place pl ? pl.withArea(corner(pl.area(), l, first))
+                : corner(tr instanceof Trigger.Region r ? r : null, l, first));
+    }
+
+    private static Trigger.Region corner(Trigger.Region t, Location l, boolean first) {
+        int gy = l.getBlockY(); // feet level, the same coordinate Region.contains() compares
+        if (t == null) return new Trigger.Region(l.getWorld().getName(), l.getBlockX(), l.getBlockZ(), l.getBlockX(), l.getBlockZ(), gy, 4);
+        int x1 = first ? l.getBlockX() : t.x1(), z1 = first ? l.getBlockZ() : t.z1();
+        int x2 = first ? t.x2() : l.getBlockX(), z2 = first ? t.z2() : l.getBlockZ();
+        int base = first ? gy : Math.min(t.baseY(), gy);
+        return new Trigger.Region(l.getWorld().getName(), x1, z1, x2, z2, base, t.height());
     }
 
     public void setHeight(Player p, String id, int i, int h) {
@@ -537,9 +539,20 @@ public final class EditorService {
 
     public void setHeight(Player p, String id, int i, int opt, int h) {
         editTrigger(p, id, i, opt, false, tr -> {
+            if (tr instanceof Trigger.Place pl && pl.area() != null) return pl.withArea(height(pl.area(), h));
             if (!(tr instanceof Trigger.Region t)) throw new IllegalArgumentException("step is not REGION");
-            return new Trigger.Region(t.world(), t.x1(), t.z1(), t.x2(), t.z2(), t.baseY(), clamp(h, 1, 128));
+            return height(t, h);
         });
+    }
+
+    private static Trigger.Region height(Trigger.Region t, int h) {
+        return new Trigger.Region(t.world(), t.x1(), t.z1(), t.x2(), t.z2(), t.baseY(), clamp(h, 1, 128));
+    }
+
+    /** PLACE: only blocks placed inside an area count; it starts as one column where the editor stands, like a new REGION. */
+    public void setPlaceArea(Player p, String id, int i, int opt, boolean on) {
+        Location l = p.getLocation();
+        editTrigger(p, id, i, opt, false, tr -> tr instanceof Trigger.Place pl ? pl.withArea(on ? corner(null, l, true) : null) : tr);
     }
 
     public void setBlock(Player p, String id, int i, Block b) {
@@ -620,6 +633,42 @@ public final class EditorService {
             Trigger.Kill old = tr instanceof Trigger.Kill k ? k : new Trigger.Kill("ANY", 5);
             return new Trigger.Kill(t == null ? old.target() : t, clamp(amount == null ? old.amount() : amount, 1, 1000));
         });
+    }
+
+    /** HAVE_ITEM: {@code item} null keeps the item, otherwise a material key ("wheat"); amount is clamped to 1..2304. */
+    public void setHaveItem(Player p, String id, int i, int opt, String item, Integer amount) {
+        String it = item == null ? null : item.strip().toLowerCase();
+        if (it != null && !Validation.validItem(it)) {
+            p.sendMessage(m.get("editor-bad-item", "item", Messages.esc(item)));
+            return;
+        }
+        editTrigger(p, id, i, opt, false, tr -> {
+            Trigger.HaveItem old = tr instanceof Trigger.HaveItem h ? h : new Trigger.HaveItem("wheat", 16);
+            return new Trigger.HaveItem(it == null ? old.item() : it, clamp(amount == null ? old.amount() : amount, 1, 2304));
+        });
+    }
+
+    /** PLACE: {@code block} null keeps it; amount is clamped to 1..1000. */
+    public void setPlace(Player p, String id, int i, int opt, String block, Integer amount) {
+        String b = block == null ? null : block.strip().toLowerCase();
+        if (b != null && !Validation.validBlock(b)) {
+            p.sendMessage(m.get("editor-bad-block", "block", Messages.esc(block)));
+            return;
+        }
+        editTrigger(p, id, i, opt, false, tr -> {
+            Trigger.Place old = tr instanceof Trigger.Place pl ? pl : new Trigger.Place("torch", 1, null);
+            return new Trigger.Place(b == null ? old.block() : b, clamp(amount == null ? old.amount() : amount, 1, 1000), old.area());
+        });
+    }
+
+    /** The item in the editor's main hand as a material key, or null (with a message) if the hand is empty. */
+    public String heldItem(Player p) {
+        org.bukkit.inventory.ItemStack it = p.getInventory().getItemInMainHand();
+        if (it.getType().isAir()) {
+            p.sendMessage(m.get("editor-hold-item"));
+            return null;
+        }
+        return it.getType().getKey().getKey();
     }
 
     public void setDimension(Player p, String id, int i, World.Environment env) {
@@ -919,6 +968,7 @@ public final class EditorService {
                     case Trigger.Region r -> r.world();
                     case Trigger.SignClick s -> s.sign() == null ? null : s.sign().world();
                     case Trigger.Interact in -> in.block() == null ? null : in.block().world();
+                    case Trigger.Place pl -> pl.area() == null ? null : pl.area().world();
                     default -> null;
                 };
                 if (world != null && Bukkit.getWorld(world) == null) out.add("step " + (i + 1) + ": world '" + world + "' is not loaded");

@@ -9,6 +9,7 @@ import cloud.schwnbrg.questbook.model.Step;
 import cloud.schwnbrg.questbook.model.Target;
 import cloud.schwnbrg.questbook.model.TextVariant;
 import cloud.schwnbrg.questbook.model.Trigger;
+import cloud.schwnbrg.questbook.model.Validation;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -86,6 +87,8 @@ public final class QuestRepository {
             Map.entry("DIMENSION", Set.of("type", "env")),
             Map.entry("ADVANCEMENT", Set.of("type", "key")),
             Map.entry("KILL", Set.of("type", "target", "amount")),
+            Map.entry("HAVE_ITEM", Set.of("type", "item", "amount", "take")), // "take" (1.3 betas) is read and ignored
+            Map.entry("PLACE", Set.of("type", "block", "amount", "area", "at")), // "at" (1.3 betas): one spot, read as a 1x1x1 area
             Map.entry("CHOICE", Set.of("type", "options")),
             Map.entry("FIRST_OF", Set.of("type", "options")));
 
@@ -110,7 +113,11 @@ public final class QuestRepository {
         ConfigurationSection re = c.getConfigurationSection("requires_endings");
         if (re != null) for (String k : re.getKeys(false)) reqEnd.put(k, re.getString(k, ""));
         ConfigurationSection g = c.getConfigurationSection("guide");
-        Quest.Guide guide = g == null ? Quest.Guide.OFF : new Quest.Guide(g.getBoolean("particles"), g.getBoolean("compass"));
+        // No guide key: a file from before 1.2 gets the default (on). 1.2.0 wrote the key only when the guide was on, so a
+        // 1.2.0 file without it had the guide off on purpose. 1.2+ files are recognised by their step ids.
+        boolean from12 = c.getMapList("steps").stream().anyMatch(st -> st.containsKey("id"));
+        Quest.Guide guide = g == null ? (from12 ? Quest.Guide.OFF : Quest.Guide.DEFAULT)
+                : new Quest.Guide(g.getBoolean("particles", Quest.Guide.DEFAULT.particles()), g.getBoolean("compass", Quest.Guide.DEFAULT.compass()));
         return new Quest(id, c.getString("title", id), c.getString("summary", ""), status,
                 block(c.getConfigurationSection("start_sign")), List.copyOf(c.getStringList("requires")), reqEnd,
                 c.getBoolean("repeatable"), c.getInt("repeat_cooldown_seconds"), c.getString("author", ""), c.getString("owner", ""), steps, guide);
@@ -180,7 +187,8 @@ public final class QuestRepository {
         }
         boolean not = s.getBoolean("not");
         if (s.contains("item")) {
-            return new Cond.HasItem(s.getString("item", "").toLowerCase(), s.getInt("amount", 1), s.getBoolean("take"), not);
+            if (s.getBoolean("take")) log.warning(where + ": 'take: true' is ignored: Questbook never takes items any more, so this only checks that the player has them. Check that the quest still makes sense.");
+            return new Cond.HasItem(s.getString("item", "").toLowerCase(), s.getInt("amount", 1), not);
         }
         if (s.contains("ending")) return new Cond.Ending(s.getString("quest", ""), s.getString("ending", ""), not);
         if (s.contains("picked")) return new Cond.Picked(s.getString("quest", ""), s.getString("step", ""), s.getString("picked", ""), not);
@@ -229,6 +237,22 @@ public final class QuestRepository {
                     target = "ANY";
                 }
                 yield new Trigger.Kill(target, t.getInt("amount", 5));
+            }
+            case "HAVE_ITEM" -> {
+                String item = t.getString("item", "").toLowerCase();
+                if (!Validation.validItem(item)) problem(problems, where, "unknown item '" + item + "'");
+                if (t.getBoolean("take")) log.warning(where + ": 'take: true' is ignored: Questbook never takes items any more, so this only checks that the player has them. Check that the quest still makes sense.");
+                yield new Trigger.HaveItem(item, t.getInt("amount", 1));
+            }
+            case "PLACE" -> {
+                String block = t.getString("block", "").toLowerCase();
+                if (!Validation.validBlock(block)) problem(problems, where, "'" + block + "' is not a block that can be placed");
+                ConfigurationSection ar = t.getConfigurationSection("area");
+                Trigger.Region area = ar == null ? null : new Trigger.Region(ar.getString("world", "world"), ar.getInt("x1"), ar.getInt("z1"),
+                        ar.getInt("x2"), ar.getInt("z2"), ar.getInt("base_y"), ar.getInt("height", 4));
+                BlockRef at = area == null ? block(t.getConfigurationSection("at")) : null;
+                if (at != null) area = new Trigger.Region(at.world(), at.x(), at.z(), at.x(), at.z(), at.y(), 1);
+                yield new Trigger.Place(block, t.getInt("amount", 1), area);
             }
             case "ADVANCEMENT" -> {
                 String raw = t.getString("key", "minecraft:story/root");
@@ -291,12 +315,11 @@ public final class QuestRepository {
         if (!q.requireEndings().isEmpty()) y.set("requires_endings", new LinkedHashMap<>(q.requireEndings()));
         y.set("repeatable", q.repeatable());
         y.set("repeat_cooldown_seconds", q.repeatCooldownSeconds());
-        if (!q.guide().equals(Quest.Guide.OFF)) {
-            Map<String, Object> g = new LinkedHashMap<>();
-            g.put("particles", q.guide().particles());
-            g.put("compass", q.guide().compass());
-            y.set("guide", g);
-        }
+        // always written, so a quest keeps its setting if the default changes again
+        Map<String, Object> g = new LinkedHashMap<>();
+        g.put("particles", q.guide().particles());
+        g.put("compass", q.guide().compass());
+        y.set("guide", g);
         List<Map<String, Object>> steps = new ArrayList<>();
         for (Step s : q.steps()) {
             Map<String, Object> m = new LinkedHashMap<>();
@@ -357,7 +380,6 @@ public final class QuestRepository {
             case Cond.HasItem h -> {
                 m.put("item", h.item());
                 m.put("amount", h.amount());
-                if (h.take()) m.put("take", true);
             }
         }
         if (c.not()) m.put("not", true);
@@ -386,6 +408,18 @@ public final class QuestRepository {
             case Trigger.Dimension d -> m.put("env", d.env().name());
             case Trigger.AdvancementDone a -> m.put("key", a.key().asString());
             case Trigger.Kill k -> { m.put("target", k.target()); m.put("amount", k.amount()); }
+            case Trigger.HaveItem h -> { m.put("item", h.item()); m.put("amount", h.amount()); }
+            case Trigger.Place pl -> {
+                m.put("block", pl.block());
+                m.put("amount", pl.amount());
+                if (pl.area() != null) {
+                    Trigger.Region r = pl.area();
+                    Map<String, Object> a = new LinkedHashMap<>();
+                    a.put("world", r.world()); a.put("x1", r.x1()); a.put("z1", r.z1()); a.put("x2", r.x2()); a.put("z2", r.z2());
+                    a.put("base_y", r.baseY()); a.put("height", r.height());
+                    m.put("area", a);
+                }
+            }
             case Trigger.Choice c -> {
                 List<Map<String, Object>> os = new ArrayList<>();
                 for (Trigger.Option o : c.options()) {

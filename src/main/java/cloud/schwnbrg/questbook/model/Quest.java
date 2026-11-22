@@ -28,12 +28,15 @@ public record Quest(
      */
     public record Guide(boolean particles, boolean compass) {
         public static final Guide OFF = new Guide(false, false);
+        public static final Guide ON = new Guide(true, true);
+        /** What a quest gets when its file says nothing (new quests, quests from before 1.2). */
+        public static final Guide DEFAULT = ON;
     }
 
     /** Quest without ending requirements and guidance. */
     public Quest(String id, String title, String summary, QuestStatus status, BlockRef startSign, List<String> requires,
                  boolean repeatable, int repeatCooldownSeconds, String author, String owner, List<Step> steps) {
-        this(id, title, summary, status, startSign, requires, Map.of(), repeatable, repeatCooldownSeconds, author, owner, steps, Guide.OFF);
+        this(id, title, summary, status, startSign, requires, Map.of(), repeatable, repeatCooldownSeconds, author, owner, steps, Guide.DEFAULT);
     }
 
     /** Quest without an owner (files from before ownership existed). */
@@ -59,7 +62,7 @@ public record Quest(
         }
         requireEndings = Map.copyOf(re);
         steps = withIds(steps == null ? List.of() : steps);
-        guide = guide == null ? Guide.OFF : guide;
+        guide = guide == null ? Guide.DEFAULT : guide;
     }
 
     private static List<Step> withIds(List<Step> steps) {

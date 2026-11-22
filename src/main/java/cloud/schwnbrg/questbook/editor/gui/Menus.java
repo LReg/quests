@@ -328,6 +328,8 @@ public final class Menus {
             case Trigger.Dimension d -> Material.OBSIDIAN;
             case Trigger.AdvancementDone a -> Material.KNOWLEDGE_BOOK;
             case Trigger.Kill k -> Material.IRON_SWORD;
+            case Trigger.HaveItem h -> Material.BUNDLE;
+            case Trigger.Place pl -> Material.SCAFFOLDING;
             case Trigger.Choice c -> Material.OAK_BUTTON;
             case Trigger.FirstOf f -> Material.LIGHTNING_ROD;
         };
@@ -348,6 +350,11 @@ public final class Menus {
             case Trigger.Dimension d -> plain("gui-sum-dimension", "env", d.env().name());
             case Trigger.AdvancementDone a -> plain("gui-sum-advancement", "key", a.key().asString());
             case Trigger.Kill k -> plain("gui-sum-kill", "amount", String.valueOf(k.amount()), "target", k.target());
+            case Trigger.HaveItem h -> plain("gui-sum-have-item", "amount", String.valueOf(h.amount()), "item", h.item());
+            case Trigger.Place pl -> pl.area() == null ? plain("gui-sum-place", "amount", String.valueOf(pl.amount()), "block", pl.block())
+                    : plain("gui-sum-place-area", "amount", String.valueOf(pl.amount()), "block", pl.block(),
+                    "w", String.valueOf(Math.abs(pl.area().x2() - pl.area().x1()) + 1), "h", String.valueOf(pl.area().height()),
+                    "d", String.valueOf(Math.abs(pl.area().z2() - pl.area().z1()) + 1));
             case Trigger.Choice c -> plain("gui-sum-choice", "options", String.join(" | ", c.options().stream().map(o -> Validation.plain(o.label())).toList()));
             case Trigger.FirstOf f -> plain("gui-sum-first-of", "options", String.join(" | ", f.options().stream()
                     .map(o -> Validation.plain(o.label()) + " (" + o.trigger().type() + ")").toList()));
@@ -498,28 +505,7 @@ public final class Menus {
                 });
                 menu.set(26, Menu.icon(Material.MAP, "<gray>" + String.format("%.1f %.1f %.1f", r.x(), r.y(), r.z()), "<dark_gray>" + esc(r.world())), null);
             }
-            case Trigger.Region r -> {
-                menu.set(20, Menu.icon(Material.LIME_BANNER, t("gui-pos1"), t("gui-pos1-lore")), c -> {
-                    editor.setCorner(p, id, idx, opt, true);
-                    again.run();
-                });
-                menu.set(21, Menu.icon(Material.RED_BANNER, t("gui-pos2"), t("gui-pos2-lore")), c -> {
-                    editor.setCorner(p, id, idx, opt, false);
-                    again.run();
-                });
-                menu.set(22, Menu.icon(Material.RED_STAINED_GLASS_PANE, t("gui-height-minus"), t("gui-shift-5")), c -> {
-                    editor.setHeight(p, id, idx, opt, r.height() - c.amount());
-                    again.run();
-                });
-                menu.set(23, Menu.icon(Material.SLIME_BALL, t("gui-height-value", "value", String.valueOf(r.height()))), null);
-                menu.set(24, Menu.icon(Material.LIME_STAINED_GLASS_PANE, t("gui-height-plus"), t("gui-shift-5")), c -> {
-                    editor.setHeight(p, id, idx, opt, r.height() + c.amount());
-                    again.run();
-                });
-                menu.set(26, Menu.icon(Material.MAP,
-                        t("gui-size", "w", String.valueOf(Math.abs(r.x2() - r.x1()) + 1), "h", String.valueOf(r.height()), "d", String.valueOf(Math.abs(r.z2() - r.z1()) + 1)),
-                        t("gui-from-y", "y", String.valueOf(r.baseY())), "<dark_gray>" + esc(r.world())), null);
-            }
+            case Trigger.Region r -> regionRow(menu, p, id, idx, opt, r, again, 20);
             case Trigger.SignClick tr -> pickRow(menu, p, id, idx, opt, tr.sign() == null ? null : tr.sign().toString());
             case Trigger.Interact tr -> pickRow(menu, p, id, idx, opt, tr.block() == null ? null : tr.block().toString());
             case Trigger.Answer a -> {
@@ -568,6 +554,46 @@ public final class Menus {
                     editor.setKill(p, id, idx, opt, null, k.amount() + c.amount());
                     again.run();
                 });
+            }
+            case Trigger.HaveItem h -> {
+                menu.set(20, glow(Menu.icon(itemIcon(h.item()), t("gui-item", "item", pretty(h.item().toUpperCase())), t("gui-item-from-hand"))), c -> {
+                    String held = editor.heldItem(p);
+                    if (held != null) editor.setHaveItem(p, id, idx, opt, held, null);
+                    again.run();
+                });
+                menu.set(22, Menu.icon(Material.RED_STAINED_GLASS_PANE, t("gui-amount-minus"), t("gui-shift-5")), c -> {
+                    editor.setHaveItem(p, id, idx, opt, null, h.amount() - c.amount());
+                    again.run();
+                });
+                menu.set(23, Menu.icon(Material.SLIME_BALL, t("gui-amount-value", "value", String.valueOf(h.amount()))), null);
+                menu.set(24, Menu.icon(Material.LIME_STAINED_GLASS_PANE, t("gui-amount-plus"), t("gui-shift-5")), c -> {
+                    editor.setHaveItem(p, id, idx, opt, null, h.amount() + c.amount());
+                    again.run();
+                });
+            }
+            case Trigger.Place pl -> {
+                menu.set(20, glow(Menu.icon(itemIcon(pl.block()), t("gui-place-block", "block", pretty(pl.block().toUpperCase())), t("gui-item-from-hand"))), c -> {
+                    String held = editor.heldItem(p);
+                    if (held != null) editor.setPlace(p, id, idx, opt, held, null);
+                    again.run();
+                });
+                menu.set(22, Menu.icon(Material.RED_STAINED_GLASS_PANE, t("gui-amount-minus"), t("gui-shift-5")), c -> {
+                    editor.setPlace(p, id, idx, opt, null, pl.amount() - c.amount());
+                    again.run();
+                });
+                menu.set(23, Menu.icon(Material.SLIME_BALL, t("gui-amount-value", "value", String.valueOf(pl.amount()))), null);
+                menu.set(24, Menu.icon(Material.LIME_STAINED_GLASS_PANE, t("gui-amount-plus"), t("gui-shift-5")), c -> {
+                    editor.setPlace(p, id, idx, opt, null, pl.amount() + c.amount());
+                    again.run();
+                });
+                // where: anywhere, or an area set up exactly like a REGION trigger (row below)
+                boolean area = pl.area() != null;
+                menu.set(26, area ? glow(Menu.icon(Material.MAP, t("gui-place-in-area"), t("gui-place-in-area-lore"), "", t("gui-place-to-anywhere")))
+                        : Menu.icon(Material.FILLED_MAP, t("gui-place-anywhere"), t("gui-place-anywhere-lore"), "", t("gui-place-to-area")), c -> {
+                    editor.setPlaceArea(p, id, idx, opt, !area);
+                    again.run();
+                });
+                if (area) regionRow(menu, p, id, idx, opt, pl.area(), again, 29);
             }
             case Trigger.Choice ch -> {
                 if (ch.options().size() < 4) {
@@ -618,6 +644,39 @@ public final class Menus {
             }
             case Trigger.Continue c -> { }
         }
+    }
+
+    /** The item itself as the icon, a barrier for an unknown name. */
+    static Material itemIcon(String item) {
+        Material m = item == null ? null : Material.matchMaterial(item);
+        return m != null && m.isItem() && !m.isAir() ? m : Material.BARRIER;
+    }
+
+    /**
+     * Corner 1, corner 2, height − / value / +, size: the box of a REGION trigger or the area of a PLACE trigger. The
+     * buttons sit at {@code at}..{@code at}+4, the size at {@code at}+6.
+     */
+    private void regionRow(Menu menu, Player p, String id, int idx, int opt, Trigger.Region r, Runnable again, int at) {
+        menu.set(at, Menu.icon(Material.LIME_BANNER, t("gui-pos1"), t("gui-pos1-lore")), c -> {
+            editor.setCorner(p, id, idx, opt, true);
+            again.run();
+        });
+        menu.set(at + 1, Menu.icon(Material.RED_BANNER, t("gui-pos2"), t("gui-pos2-lore")), c -> {
+            editor.setCorner(p, id, idx, opt, false);
+            again.run();
+        });
+        menu.set(at + 2, Menu.icon(Material.RED_STAINED_GLASS_PANE, t("gui-height-minus"), t("gui-shift-5")), c -> {
+            editor.setHeight(p, id, idx, opt, r.height() - c.amount());
+            again.run();
+        });
+        menu.set(at + 3, Menu.icon(Material.SLIME_BALL, t("gui-height-value", "value", String.valueOf(r.height()))), null);
+        menu.set(at + 4, Menu.icon(Material.LIME_STAINED_GLASS_PANE, t("gui-height-plus"), t("gui-shift-5")), c -> {
+            editor.setHeight(p, id, idx, opt, r.height() + c.amount());
+            again.run();
+        });
+        menu.set(at + 6, Menu.icon(Material.MAP,
+                t("gui-size", "w", String.valueOf(Math.abs(r.x2() - r.x1()) + 1), "h", String.valueOf(r.height()), "d", String.valueOf(Math.abs(r.z2() - r.z1()) + 1)),
+                t("gui-from-y", "y", String.valueOf(r.baseY())), "<dark_gray>" + esc(r.world())), null);
     }
 
     private void pickRow(Menu menu, Player p, String id, int idx, int opt, String target) {
@@ -986,7 +1045,7 @@ public final class Menus {
                 p.sendMessage(m().get("editor-hold-item"));
                 return;
             }
-            openItemCond(p, new Cond.HasItem(hand.getType().getKey().getKey(), hand.getAmount(), false, false), onPick, back);
+            openItemCond(p, new Cond.HasItem(hand.getType().getKey().getKey(), hand.getAmount(), false), onPick, back);
         });
         menu.set(50, Menu.icon(Material.WRITABLE_BOOK, t("gui-cond-quest"), t("gui-cond-quest-lore")), c -> openQuestCond(p, id, onPick, back));
         if (pg < pages - 1) menu.set(52, Menu.icon(Material.ARROW, t("gui-next-page")), c -> openCondPicker(p, id, idx, pg + 1, onPick, back));
@@ -994,22 +1053,20 @@ public final class Menus {
         menu.open(p);
     }
 
-    /** "Has an item": amount − / +, and whether the items are taken when this condition is used. */
+    /** "Has an item": amount − / +. The items are only looked at, never taken. */
     private void openItemCond(Player p, Cond.HasItem h, Consumer<Cond> onPick, Runnable back) {
         Menu menu = new Menu(3, m().get("menu-item-title"));
         Material mat = Material.matchMaterial(h.item());
         menu.set(4, Menu.icon(mat == null || mat.isAir() ? Material.CHEST : mat, t("gui-item-name", "item", h.item().replace('_', ' '), "amount", String.valueOf(h.amount())),
                 t("gui-item-hand")), c -> {
             ItemStack hand = p.getInventory().getItemInMainHand();
-            if (!hand.getType().isAir()) openItemCond(p, new Cond.HasItem(hand.getType().getKey().getKey(), h.amount(), h.take(), h.not()), onPick, back);
+            if (!hand.getType().isAir()) openItemCond(p, new Cond.HasItem(hand.getType().getKey().getKey(), h.amount(), h.not()), onPick, back);
         });
         menu.set(11, Menu.icon(Material.RED_STAINED_GLASS_PANE, t("gui-item-minus"), t("gui-shift-5")),
-                c -> openItemCond(p, new Cond.HasItem(h.item(), Math.max(1, h.amount() - c.amount()), h.take(), h.not()), onPick, back));
+                c -> openItemCond(p, new Cond.HasItem(h.item(), Math.max(1, h.amount() - c.amount()), h.not()), onPick, back));
         menu.set(13, Menu.icon(Material.SLIME_BALL, t("gui-item-amount", "value", String.valueOf(h.amount()))), null);
         menu.set(15, Menu.icon(Material.LIME_STAINED_GLASS_PANE, t("gui-item-plus"), t("gui-shift-5")),
-                c -> openItemCond(p, new Cond.HasItem(h.item(), Math.min(2304, h.amount() + c.amount()), h.take(), h.not()), onPick, back));
-        menu.set(16, Menu.icon(h.take() ? Material.HOPPER : Material.CHEST, t(h.take() ? "gui-item-take-on" : "gui-item-take-off"), t("gui-item-take-lore")),
-                c -> openItemCond(p, new Cond.HasItem(h.item(), h.amount(), !h.take(), h.not()), onPick, back));
+                c -> openItemCond(p, new Cond.HasItem(h.item(), Math.min(2304, h.amount() + c.amount()), h.not()), onPick, back));
         menu.set(18, Menu.icon(Material.ARROW, t("gui-back")), c -> back.run());
         menu.set(22, Menu.icon(Material.LIME_CONCRETE, t("gui-item-done")), c -> onPick.accept(h));
         menu.set(26, Menu.icon(Material.BARRIER, t("gui-close")), c -> p.closeInventory());

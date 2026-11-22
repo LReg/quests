@@ -24,12 +24,12 @@ export:
   server_name: "schwnbrg"
 # Text limits checked when quests are saved, loaded and published (summary was fixed at 200 before 1.2).
 limits:
-  summary: 600
+  summary: 1000
   hint: 200
   line: 256
   lines_per_step: 30
   steps: 50
-# Player guide (turned on per quest in /qe): how often the compass bar updates and how far particles are shown.
+# Player guide (on by default, switched per quest in /qe): how often the compass bar updates and how far particles are shown.
 guide:
   interval_ticks: 5
   particle_distance: 48

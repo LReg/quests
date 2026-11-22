@@ -133,7 +133,7 @@ class BranchingTest {
     @Test
     void summaryLimitIsLongerAndConfigurable() {
         Quest q = lighthouse().withSummary("x".repeat(500));
-        assertTrue(Validation.errors(q, Map.of(), true).isEmpty(), "500 chars fit the new default of 600");
+        assertTrue(Validation.errors(q, Map.of(), true).isEmpty(), "500 chars fit the default of 1000");
         Validation.setLimits(new Validation.Limits(200, 200, 256, 30, 50));
         assertTrue(Validation.errors(q, Map.of(), true).stream().anyMatch(x -> x.contains("summary longer than 200")));
     }
@@ -144,7 +144,7 @@ class BranchingTest {
         Step gate = q.steps().get(5);
         q = q.withStep(5, gate.withTextIf(List.of(new TextVariant(new Cond.Picked(q.steps().get(2).id(), "o2", false), List.of("He knows your face.")))))
                 .withStep(1, q.steps().get(1).withRules(List.of(
-                        new Rule(new Cond.HasItem("dried_kelp", 3, true, false), Target.step(q.steps().get(3).id())),
+                        new Rule(new Cond.HasItem("dried_kelp", 3, false), Target.step(q.steps().get(3).id())),
                         new Rule(new Cond.Ending("other", "The Thief", true), Target.end("Lost")),
                         new Rule(new Cond.Picked("other", "s2", "o1", false), Target.step(q.steps().get(4).id())))))
                 .withStep(0, q.steps().get(0).withTrigger(new Trigger.FirstOf(List.of(
@@ -156,6 +156,63 @@ class BranchingTest {
         QuestRepository repo = new QuestRepository(dir, Logger.getAnonymousLogger());
         repo.save(q);
         assertEquals(q, repo.loadAll().get("lighthouse"));
+    }
+
+    @Test
+    void haveItemAndPlaceRoundTripAndValidate(@TempDir Path dir) throws Exception {
+        Quest q = lighthouse();
+        q = q.withStep(0, q.steps().get(0).withTrigger(new Trigger.HaveItem("wheat", 16)))
+                .withStep(1, q.steps().get(1).withTrigger(new Trigger.Place("torch", 3, null)))
+                .withStep(3, q.steps().get(3).withTrigger(new Trigger.Place("redstone", 1, new Trigger.Region("world", 4, -2, 4, -2, 70, 1))))
+                .withStep(4, q.steps().get(4).withTrigger(new Trigger.FirstOf(List.of(
+                        new Trigger.Branch(null, "Paid", new Trigger.HaveItem("emerald", 5)),
+                        new Trigger.Branch(null, "Built", new Trigger.Place("oak_planks", 10, null))))));
+        assertEquals(List.of(), Validation.errors(q, Map.of(), true));
+        QuestRepository repo = new QuestRepository(dir, Logger.getAnonymousLogger());
+        repo.save(q);
+        assertEquals(q, repo.loadAll().get("lighthouse"));
+
+        // whether an item places a block needs the server's registry; names and amounts are checked everywhere
+        Quest bad = q.withStep(0, q.steps().get(0).withTrigger(new Trigger.HaveItem("not_an_item", 0)))
+                .withStep(1, q.steps().get(1).withTrigger(new Trigger.Place("no_such_block", 0, null)));
+        List<String> e = Validation.errors(bad, Map.of(), false);
+        assertTrue(e.stream().anyMatch(x -> x.contains("unknown item 'not_an_item'")), e.toString());
+        assertTrue(e.stream().anyMatch(x -> x.contains("item amount must be")), e.toString());
+        assertTrue(e.stream().anyMatch(x -> x.contains("'no_such_block' is not a block")), e.toString());
+        assertTrue(e.stream().anyMatch(x -> x.contains("place amount must be")), e.toString());
+        // an area must have room for the blocks
+        Quest small = q.withStep(1, q.steps().get(1).withTrigger(new Trigger.Place("torch", 5, new Trigger.Region("world", 0, 0, 0, 0, 64, 1))));
+        assertTrue(Validation.errors(small, Map.of(), false).stream().anyMatch(x -> x.contains("room for only 1 blocks")));
+    }
+
+    @Test
+    void aOneDotTwoFileWithoutGuideHadItOff(@TempDir Path dir) throws Exception {
+        // 1.2.0 wrote guide: only when it was on; its files have step ids
+        Files.writeString(dir.resolve("g.yml"), """
+                id: g
+                title: "G"
+                status: DRAFT
+                steps:
+                  - id: s1
+                    text: ["one"]
+                    trigger: { type: CONTINUE }
+                """);
+        assertEquals(Quest.Guide.OFF, new QuestRepository(dir, Logger.getAnonymousLogger()).loadAll().get("g").guide());
+    }
+
+    @Test
+    void placeWithOldSpotLoadsAsOneBlockArea(@TempDir Path dir) throws Exception {
+        Files.writeString(dir.resolve("p.yml"), """
+                id: p
+                title: "P"
+                status: DRAFT
+                steps:
+                  - text: ["put it here"]
+                    trigger: { type: PLACE, block: torch, amount: 1, at: { world: world, x: 3, y: 65, z: 7 } }
+                """);
+        Quest q = new QuestRepository(dir, Logger.getAnonymousLogger()).loadAll().get("p");
+        assertEquals(new Trigger.Place("torch", 1, new Trigger.Region("world", 3, 7, 3, 7, 65, 1)), q.steps().get(0).trigger());
+        assertTrue(((Trigger.Place) q.steps().get(0).trigger()).area().contains("world", 3, 65, 7));
     }
 
     @Test
@@ -183,7 +240,7 @@ class BranchingTest {
         assertEquals(QuestStatus.PUBLISHED, q.status(), "no problems, stays published");
         assertEquals(List.of("s1", "s2", "s3"), q.steps().stream().map(Step::id).toList());
         assertTrue(q.steps().stream().noneMatch(Step::branches));
-        assertEquals(Quest.Guide.OFF, q.guide());
+        assertEquals(Quest.Guide.ON, q.guide(), "a file without guide: gets the default, which is on");
         assertEquals(Map.of(), q.requireEndings());
         assertEquals(Target.step("s2"), q.fallThrough(0));
         assertEquals(Target.end(null), q.fallThrough(2));

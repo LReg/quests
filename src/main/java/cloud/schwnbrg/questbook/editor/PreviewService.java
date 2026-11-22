@@ -77,6 +77,7 @@ public final class PreviewService {
             }
             case Trigger.SignClick t -> cube(p, c, t.sign(), max);
             case Trigger.Interact t -> cube(p, c, t.block(), max);
+            case Trigger.Place t -> { if (t.area() != null) draw(p, t.area(), c, max); }
             default -> { }
         }
     }

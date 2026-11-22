@@ -2,9 +2,11 @@ package cloud.schwnbrg.questbook.runtime;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /** A player's current position in one quest. {@code armed} = text delivered, triggers count. */
 public final class Run {
@@ -13,6 +15,8 @@ public final class Run {
     public int step;
     /** Kills counted so far in the current step, per WORLD CHOICE option id ("" for a plain KILL step). Memory only. */
     public final Map<String, Integer> counts = new HashMap<>();
+    /** Spots where blocks were placed for the current step's PLACE triggers ("option|world,x,y,z"), so each spot counts once. Memory only. */
+    public final Set<String> placed = new HashSet<>();
     public boolean armed;
     /** Step id → what the player picked there (button, option or accepted answer). Saved with the progress. */
     public final Map<String, String> choices = new LinkedHashMap<>();

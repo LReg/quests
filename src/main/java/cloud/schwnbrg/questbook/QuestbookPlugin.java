@@ -101,6 +101,8 @@ public final class QuestbookPlugin extends JavaPlugin {
 
         new PreviewService(this, editor).start();
         guide.start();
+        // HAVE_ITEM: a safety net for inventory changes no event reports (hoppers, commands, other plugins)
+        Bukkit.getScheduler().runTaskTimer(this, () -> { for (org.bukkit.entity.Player p : Bukkit.getOnlinePlayers()) quests.onInventory(p); }, 20L, 20L);
         if (!Bukkit.getOnlinePlayers().isEmpty()) {
             getLogger().warning("Players are online while the plugin enables: /reload is not supported. Restart the server instead.");
         }

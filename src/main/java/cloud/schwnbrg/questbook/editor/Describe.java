@@ -76,7 +76,7 @@ public final class Describe {
                 Quest src = quests.apply(e.quest());
                 yield plain("desc-ending", "ending", strip(e.ending()), "quest", src == null ? e.quest() : strip(src.title()));
             }
-            case Cond.HasItem h -> plain(h.take() ? "desc-item-take" : "desc-item", "amount", String.valueOf(h.amount()),
+            case Cond.HasItem h -> plain("desc-item", "amount", String.valueOf(h.amount()),
                     "item", h.item().replace('_', ' '));
         };
         return c.not() ? plain("desc-not", "what", s) : s;

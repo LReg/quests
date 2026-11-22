@@ -27,14 +27,14 @@ public sealed interface Cond permits Cond.Picked, Cond.Ending, Cond.HasItem {
     /** The player finished another quest with this ending. */
     record Ending(String quest, String ending, boolean not) implements Cond {}
 
-    /** The player carries at least {@code amount} of {@code item} (a material key such as dried_kelp); {@code take} removes them when the rule is used. */
-    record HasItem(String item, int amount, boolean take, boolean not) implements Cond {}
+    /** The player carries at least {@code amount} of {@code item} (a material key such as dried_kelp). Only looked at, never taken. */
+    record HasItem(String item, int amount, boolean not) implements Cond {}
 
     static Cond negate(Cond c) {
         return switch (c) {
             case Picked p -> new Picked(p.quest(), p.step(), p.value(), !p.not());
             case Ending e -> new Ending(e.quest(), e.ending(), !e.not());
-            case HasItem h -> new HasItem(h.item(), h.amount(), h.take(), !h.not());
+            case HasItem h -> new HasItem(h.item(), h.amount(), !h.not());
         };
     }
 }

@@ -151,6 +151,37 @@ public final class QuestListener implements Listener {
         quests.onInteract(p, b);
     }
 
+    /** MONITOR: only blocks that really stay placed count. The item in hand says what was placed (a wall torch is a torch). */
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onPlace(org.bukkit.event.block.BlockPlaceEvent e) {
+        // not cancelled but still reverted by the server (spawn protection, build height): does not count
+        if (!e.canBuild()) return;
+        quests.onPlace(e.getPlayer(), e.getBlockPlaced(), e.getItemInHand().getType());
+    }
+
+    // HAVE_ITEM: checked a tick after anything that may change the inventory (the item is in it by then)
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onPickup(org.bukkit.event.entity.EntityPickupItemEvent e) {
+        if (e.getEntity() instanceof Player p) laterInventory(p);
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onInventoryClick(org.bukkit.event.inventory.InventoryClickEvent e) {
+        if (e.getWhoClicked() instanceof Player p) laterInventory(p);
+    }
+
+    @EventHandler
+    public void onInventoryClose(org.bukkit.event.inventory.InventoryCloseEvent e) {
+        if (e.getPlayer() instanceof Player p) laterInventory(p);
+    }
+
+    private void laterInventory(Player p) {
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            if (p.isOnline()) quests.onInventory(p);
+        });
+    }
+
     private void showIntro(Player p, Quest q) {
         if (!quests.isReady(p)) {
             p.sendMessage(plugin.messages().get("loading"));

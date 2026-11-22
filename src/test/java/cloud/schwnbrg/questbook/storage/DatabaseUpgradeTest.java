@@ -76,6 +76,32 @@ class DatabaseUpgradeTest {
     }
 
     @Test
+    void runFromBeforeAOneDotOneDetourIsIgnored(@TempDir Path dir) throws Exception {
+        Path file = dir.resolve("questbook.db");
+        Database db = new Database(file, Logger.getAnonymousLogger());
+        db.open();
+        db.saveProgress(P, new Progress("q", Progress.State.ACTIVE, 4, 1, 100, 0, 0, Map.of("s3", "o1"), List.of("s1", "s3", "s5"), null));
+        db.close();
+        // the 1.1 jar moves the player on: it writes progress only
+        try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + file); Statement s = c.createStatement()) {
+            s.execute("INSERT OR REPLACE INTO progress VALUES ('" + P + "', 'q', 'ACTIVE', 1, 150, 200, 0, 0)");
+        }
+        db = new Database(file, Logger.getAnonymousLogger());
+        db.open();
+        Progress back = db.loadPlayer(P).get().progress.get("q");
+        assertEquals(1, back.step());
+        assertEquals(List.of(), back.path(), "the old path would move the player back to s5");
+        assertEquals(Map.of(), back.choices());
+        db.close();
+    }
+
+    @Test
+    void brokenValuesAreSkipped() {
+        assertEquals(Map.of("s2", "o1"), Database.decodeChoices("s1=%zz&s2=o1"));
+        assertEquals(List.of("s1"), Database.decodePath("s1,%zz"));
+    }
+
+    @Test
     void choicesKeepTheirOrder() {
         Map<String, String> m = new java.util.LinkedHashMap<>();
         for (int i = 9; i >= 1; i--) m.put("s" + i, "o" + i);

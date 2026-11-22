@@ -399,6 +399,7 @@ public final class QuestService {
         if (q == null || r.step >= q.steps().size()) return;
         r.armed = false;
         r.counts.clear();
+        r.placed.clear();
         delivery.cancel(p.getUniqueId(), r); // a re-delivery (republish) must not double up
         Step s = q.steps().get(r.step);
         List<Component> lines = lines(r, textFor(p, r, s));
@@ -480,9 +481,66 @@ public final class QuestService {
                     completeStep(p, r, part.option());
                     return;
                 }
+            } else if (t instanceof Trigger.HaveItem h) {
+                if (carries(p, h)) {
+                    completeStep(p, r, part.option());
+                    return;
+                }
             } else if (matchesLocation(p.getLocation(), t)) {
                 completeStep(p, r, part.option());
                 return;
+            }
+        }
+    }
+
+    /** True if the player carries enough for a HAVE_ITEM trigger. The plugin never takes or changes items. */
+    private static boolean carries(Player p, Trigger.HaveItem h) {
+        Material mat = Material.matchMaterial(h.item());
+        return mat != null && count(p, mat) >= h.amount();
+    }
+
+    private static final Predicate<Trigger> HAVE_ITEM = t -> t instanceof Trigger.HaveItem;
+
+    /**
+     * The inventory may have changed (pickup, click, crafting, the once-a-second check): completes the first armed
+     * HAVE_ITEM trigger the player now satisfies. One per call; the next check (at most a second later) finishes the others.
+     */
+    public void onInventory(Player p) {
+        if (!eligible(p) || !hasArmed(p, HAVE_ITEM)) return;
+        for (Run r : runsOf(p)) {
+            Step s = armedStep(r);
+            if (s == null) continue;
+            for (Part part : parts(s.trigger())) {
+                if (part.trigger() instanceof Trigger.HaveItem h && carries(p, h)) {
+                    completeStep(p, r, part.option());
+                    return;
+                }
+            }
+        }
+    }
+
+    /**
+     * A player placed a block. {@code placedAs} is the item it was placed from (a wall torch was a torch). Counts towards
+     * every armed PLACE trigger it matches; each spot counts once per step.
+     */
+    public void onPlace(Player p, Block b, Material placedAs) {
+        if (!eligible(p) || !hasArmed(p, t -> t instanceof Trigger.Place)) return;
+        for (Run r : runsOf(p)) {
+            Step s = armedStep(r);
+            if (s == null) continue;
+            for (Part part : parts(s.trigger())) {
+                if (!(part.trigger() instanceof Trigger.Place pl)) continue;
+                Material want = Material.matchMaterial(pl.block());
+                if (want == null || (want != placedAs && want != b.getType())) continue;
+                if (pl.area() != null && !pl.area().contains(b.getWorld().getName(), b.getX(), b.getY(), b.getZ())) continue;
+                String key = part.option() == null ? "" : part.option();
+                if (!r.placed.add(key + "|" + b.getWorld().getName() + "," + b.getX() + "," + b.getY() + "," + b.getZ())) continue;
+                int n = r.counts.merge(key, 1, Integer::sum);
+                if (n >= pl.amount()) {
+                    completeStep(p, r, part.option());
+                    break;
+                }
+                p.sendActionBar(prefixed(r, m.get("place-progress", "count", String.valueOf(n), "total", String.valueOf(pl.amount()))));
             }
         }
     }
@@ -525,7 +583,7 @@ public final class QuestService {
 
     // ---------- conditions and routing ----------
 
-    /** True if the condition holds for this player and run. Never changes anything (items are taken in {@link #route}). */
+    /** True if the condition holds for this player and run. Only looks, never changes anything. */
     public boolean test(Player p, Run r, Cond c) {
         boolean v = switch (c) {
             case Cond.Picked pk -> {
@@ -556,26 +614,11 @@ public final class QuestService {
         return n;
     }
 
-    /** Takes {@code amount} items from the storage slots and, for what is left, the off hand ({@link #count} counts both). */
-    private static void take(Player p, Material mat, int amount) {
-        int left = 0;
-        for (ItemStack rest : p.getInventory().removeItem(new ItemStack(mat, amount)).values()) left += rest.getAmount();
-        if (left <= 0) return;
-        ItemStack off = p.getInventory().getItemInOffHand();
-        if (off.getType() != mat) return;
-        if (off.getAmount() <= left) p.getInventory().setItemInOffHand(null);
-        else off.setAmount(off.getAmount() - left);
-    }
-
     /** Where the player goes after step i: the first rule whose condition is true, otherwise the step's next. */
     private Target route(Player p, Run r, Quest q, int i) {
         Step s = q.steps().get(i);
         for (Rule rule : s.rules()) {
             if (!test(p, r, rule.cond())) continue;
-            if (rule.cond() instanceof Cond.HasItem h && h.take() && !h.not() && !r.test) {
-                Material mat = Material.matchMaterial(h.item());
-                if (mat != null) take(p, mat, h.amount());
-            }
             return rule.target();
         }
         return q.fallThrough(i);

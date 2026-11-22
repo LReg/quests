@@ -136,11 +136,14 @@ public final class AdvancementSync {
     }
 
     /**
-     * The tooltip text: the summary as one line, cut at 200 characters. Summaries up to 200 chars on one line (all
-     * quests from before 1.2) come out exactly as before, so their advancement does not count as changed.
+     * The tooltip text. Up to 200 characters (every summary from before 1.2) it is exactly what 1.1 used, whitespace and
+     * line breaks included, so the hash in advancements.yml still matches and nothing counts as changed. Longer
+     * summaries become one line, cut at 200 characters.
      */
     static String description(Quest quest) {
-        String s = plain(quest.summary().isBlank() ? quest.title() : quest.summary()).replaceAll("\\s*\\n\\s*", " ").strip();
+        String raw = plain(quest.summary().isBlank() ? quest.title() : quest.summary());
+        if (raw.length() <= 200) return raw;
+        String s = raw.replaceAll("\\s*\\n\\s*", " ").strip();
         if (s.length() <= 200) return s;
         int cut = s.lastIndexOf(' ', 199);
         return s.substring(0, cut > 120 ? cut : 199) + "…";

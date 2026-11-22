@@ -14,20 +14,24 @@ Players: `/journal`, `/quest answer|abandon|choose|track|mute|unmute`. Editors (
 
 Every step has a text told when it starts (before the trigger) and an optional text told when the trigger has fired (`after`, `/qe step after <quest> <n>`). Triggers: `CONTINUE`, `REACH`, `REGION`, `SIGN`, `INTERACT`, `ANSWER`, `DIMENSION`, `ADVANCEMENT` and `KILL` (`/qe step kill <quest> <n> <target> [amount]`, target is `ANY`, `ANIMAL`, `MONSTER`, `PLAYER` or an entity type; the kill count is kept in memory only).
 
+`HAVE_ITEM` (1.3): the player carries a number of an item (storage slots and off hand, not inside shulker boxes or bundles). The items are only looked at. `PLACE` (1.3): the player places a number of blocks of a type, anywhere or only inside an area that is set up like a REGION (corners and height); each spot counts once. In the editor the item or block is copied from your main hand. Both can be WORLD CHOICE options.
+
 ## Branching, choices and endings (1.2)
 
 Every step goes on to the following step, as before. A step's **Then…** menu (in the step menu, bottom row) can change that:
 
-- **Conditions:** "if … → go to step …", checked top to bottom, first true one wins. What to check is picked from a list, never typed: a button of a `CHOICE` step, an outcome of a `WORLD CHOICE` (`FIRST_OF`) step, the answer given at an `ANSWER` step with several answers, an item the player carries (optionally taken), or a choice or ending in another quest. Right-click turns a condition into NOT.
+- **Conditions:** "if … → go to step …", checked top to bottom, first true one wins. What to check is picked from a list, never typed: a button of a `CHOICE` step, an outcome of a `WORLD CHOICE` (`FIRST_OF`) step, the answer given at an `ANSWER` step with several answers, an item the player carries, or a choice or ending in another quest. Right-click turns a condition into NOT.
 - **Otherwise:** the following step by default; any other step (two paths meet again), or **End the quest** with an optional ending name the player sees in the completion title and the journal.
 
 New triggers: `CHOICE` (2–4 buttons, the click is remembered) and `FIRST_OF` / WORLD CHOICE (2–3 world triggers, whichever happens first counts). **Other text if…** gives a step a different text when a condition is true. Requires can ask for a specific ending (right-click in the Requires menu). The quest menu has a **branch map** (plain lines, `/qe map <quest>` in chat), and Validate warns about steps nothing leads to, loops with no way out and a step that runs on into a step a condition jumps to. `/qe skip [option]` picks a button in test runs.
 
-**Player guide**, per quest (quest menu, compass icon, or `/qe guide <quest> particles|compass <true|false>`; off by default): particles outline where the current step wants the player, and a compass bar at the top of the screen points there. The journal shows the direction, the player's choices, `[Track]` (which quest the compass follows) and, for finished quests, the path they took and their ending.
+**Player guide**, per quest (quest menu, compass icon, or `/qe guide <quest> particles|compass <true|false>`; on by default, also for quests whose file has no `guide:` yet): particles outline where the current step wants the player, and a compass bar at the top of the screen points there. The journal shows the direction, the player's choices, `[Track]` (which quest the compass follows) and, for finished quests, the path they took and their ending.
 
-Summaries keep line breaks and can be 600 characters long; all text limits are in `limits:` in `config.yml`.
+Summaries keep line breaks and can be 1000 characters long (600 in 1.2.0); all text limits are in `limits:` in `config.yml`.
 
-**Upgrading from 1.1:** replace the jar. Quest files and the database need no changes: steps get hidden ids (`id: s1`, …) when a quest is next saved, and choices, paths and endings are stored in a new table `progress_extra`, so the old `progress` table is untouched and 1.1 can still read the database. New config keys and messages fall back to the built-in defaults until you add them. Going back to the 1.1 jar also works: quests with conditions run linearly there (unknown keys are logged), and quests with `CHOICE` or `WORLD CHOICE` steps load as drafts.
+**Upgrading from 1.1 or 1.2:** replace the jar. Quest files and the database need no changes: steps get hidden ids (`id: s1`, …) when a quest is next saved, and choices, paths and endings are stored in a new table `progress_extra`, so the old `progress` table is untouched and 1.1 can still read the database. New config keys and messages fall back to the built-in defaults until you add them. Going back to the 1.1 jar also works: quests with conditions run linearly there (unknown keys are logged), and quests with `CHOICE` or `WORLD CHOICE` steps load as drafts. Going back to 1.2.0 works the same way: quests with `HAVE_ITEM` or `PLACE` steps load as drafts there.
+
+**Changes in 1.3 to know about when upgrading:** the player guide is on by default for quests from 1.1 (a 1.2.0 quest keeps its setting). Questbook never takes items any more: a 1.2.0 "has item" condition with `take: true` now only checks the item, and the server log warns about each one, so check those quests.
 
 ## Stats export and dashboard
 

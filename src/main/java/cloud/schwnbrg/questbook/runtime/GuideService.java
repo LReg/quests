@@ -114,6 +114,7 @@ public final class GuideService {
                 case Trigger.Region r -> add(out, r.world(), (r.x1() + r.x2()) / 2.0 + 0.5, r.baseY(), (r.z1() + r.z2()) / 2.0 + 0.5);
                 case Trigger.SignClick s -> block(out, s.sign());
                 case Trigger.Interact i -> block(out, i.block());
+                case Trigger.Place pl -> { if (pl.area() != null) out.addAll(targets(pl.area())); }
                 default -> { }
             }
         }

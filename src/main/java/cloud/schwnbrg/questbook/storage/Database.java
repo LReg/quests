@@ -73,12 +73,12 @@ public final class Database {
         // Added in 1.2 as its own table (not new columns), so the 1.1 jar still works on a database the 1.2 jar has used.
         try (Statement s = conn.createStatement()) {
             s.execute("CREATE TABLE IF NOT EXISTS progress_extra (player_uuid TEXT NOT NULL, quest_id TEXT NOT NULL, choices TEXT, "
-                    + "path TEXT, ending TEXT, done_choices TEXT, done_path TEXT, PRIMARY KEY (player_uuid, quest_id))");
+                    + "path TEXT, ending TEXT, done_choices TEXT, done_path TEXT, run_at INTEGER, PRIMARY KEY (player_uuid, quest_id))");
         }
-        // a database from an early 1.2 build has the table without the last two columns
-        for (String col : List.of("done_choices", "done_path")) {
+        // a database written by 1.2.0 has the table without the last three columns
+        for (String col : List.of("done_choices TEXT", "done_path TEXT", "run_at INTEGER")) {
             try (Statement s = conn.createStatement()) {
-                s.execute("ALTER TABLE progress_extra ADD COLUMN " + col + " TEXT");
+                s.execute("ALTER TABLE progress_extra ADD COLUMN " + col);
             } catch (SQLException alreadyThere) {
                 // the usual case
             }
@@ -96,13 +96,18 @@ public final class Database {
         return b.toString();
     }
 
+    /** A broken entry (hand-edited file) is skipped: one bad value must not keep a player from loading at all. */
     static Map<String, String> decodeChoices(String s) {
         Map<String, String> m = new LinkedHashMap<>();
         if (s == null || s.isEmpty()) return m;
         for (String part : s.split("&")) {
             int i = part.indexOf('=');
             if (i <= 0) continue;
-            m.put(URLDecoder.decode(part.substring(0, i), StandardCharsets.UTF_8), URLDecoder.decode(part.substring(i + 1), StandardCharsets.UTF_8));
+            try {
+                m.put(URLDecoder.decode(part.substring(0, i), StandardCharsets.UTF_8), URLDecoder.decode(part.substring(i + 1), StandardCharsets.UTF_8));
+            } catch (IllegalArgumentException broken) {
+                // skipped
+            }
         }
         return m;
     }
@@ -119,7 +124,13 @@ public final class Database {
     static List<String> decodePath(String s) {
         if (s == null || s.isEmpty()) return List.of();
         List<String> out = new ArrayList<>();
-        for (String part : s.split(",")) out.add(URLDecoder.decode(part, StandardCharsets.UTF_8));
+        for (String part : s.split(",")) {
+            try {
+                out.add(URLDecoder.decode(part, StandardCharsets.UTF_8));
+            } catch (IllegalArgumentException broken) {
+                // skipped, like a broken choice
+            }
+        }
         return out;
     }
 
@@ -151,14 +162,19 @@ public final class Database {
                                 r.getInt("step"), r.getLong("started_at"), r.getLong("updated_at"), r.getInt("completions"), r.getLong("last_completed_at")));
                     }
                 }
-                try (PreparedStatement p = conn.prepareStatement("SELECT quest_id, choices, path, ending, done_choices, done_path FROM progress_extra WHERE player_uuid=?")) {
+                try (PreparedStatement p = conn.prepareStatement("SELECT quest_id, choices, path, ending, done_choices, done_path, run_at FROM progress_extra WHERE player_uuid=?")) {
                     p.setString(1, id.toString());
                     ResultSet r = p.executeQuery();
                     while (r.next()) {
                         Progress pr = d.progress.get(r.getString(1));
                         if (pr == null) continue;
-                        d.progress.put(pr.questId(), pr.withRun(decodeChoices(r.getString(2)), decodePath(r.getString(3))).withEnding(r.getString(4))
-                                .withDone(decodeChoices(r.getString(5)), decodePath(r.getString(6))));
+                        // run_at is progress.updated_at when this row was written. If they differ, a 1.1 jar ran in between
+                        // and moved the player without knowing this table: its run (choices, path) belongs to an older
+                        // run and is ignored. Rows from 1.2.0 have no run_at and are trusted.
+                        long runAt = r.getLong(7);
+                        boolean stale = !r.wasNull() && runAt != pr.updatedAt();
+                        Progress np = stale ? pr : pr.withRun(decodeChoices(r.getString(2)), decodePath(r.getString(3)));
+                        d.progress.put(pr.questId(), np.withEnding(r.getString(4)).withDone(decodeChoices(r.getString(5)), decodePath(r.getString(6))));
                     }
                 }
                 try (PreparedStatement p = conn.prepareStatement("SELECT quest_id FROM rumours_seen WHERE player_uuid=?")) {
@@ -194,7 +210,7 @@ public final class Database {
             boolean empty = p.choices().isEmpty() && p.path().isEmpty() && p.ending() == null
                     && p.doneChoices().isEmpty() && p.donePath().isEmpty();
             try (PreparedStatement s = conn.prepareStatement(empty ? "DELETE FROM progress_extra WHERE player_uuid=? AND quest_id=?"
-                    : "INSERT OR REPLACE INTO progress_extra (player_uuid, quest_id, choices, path, ending, done_choices, done_path) VALUES (?,?,?,?,?,?,?)")) {
+                    : "INSERT OR REPLACE INTO progress_extra (player_uuid, quest_id, choices, path, ending, done_choices, done_path, run_at) VALUES (?,?,?,?,?,?,?,?)")) {
                 s.setString(1, id.toString());
                 s.setString(2, p.questId());
                 if (!empty) {
@@ -203,6 +219,7 @@ public final class Database {
                     s.setString(5, p.ending());
                     s.setString(6, encodeChoices(p.doneChoices()));
                     s.setString(7, encodePath(p.donePath()));
+                    s.setLong(8, p.updatedAt());
                 }
                 s.executeUpdate();
             }

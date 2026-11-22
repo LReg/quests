@@ -20,7 +20,7 @@ public final class Validation {
 
     /** Text limits, from config.yml {@code limits:} (defaults are the limits of 1.1). */
     public record Limits(int summary, int hint, int line, int linesPerStep, int steps) {
-        public static final Limits DEFAULT = new Limits(600, 200, 256, 30, 50);
+        public static final Limits DEFAULT = new Limits(1000, 200, 256, 30, 50);
     }
 
     private static volatile Limits limits = Limits.DEFAULT;
@@ -93,6 +93,20 @@ public final class Validation {
                 if (k.amount() < 1 || k.amount() > 1000) e.add(p + "kill amount must be 1..1000");
                 if (!Trigger.Kill.validTarget(k.target())) e.add(p + "unknown kill target '" + k.target() + "'");
             }
+            case Trigger.HaveItem h -> {
+                if (!validItem(h.item())) e.add(p + "unknown item '" + h.item() + "'");
+                if (h.amount() < 1 || h.amount() > 2304) e.add(p + "item amount must be 1..2304");
+            }
+            case Trigger.Place pl -> {
+                if (!validBlock(pl.block())) e.add(p + "'" + pl.block() + "' is not a block that can be placed");
+                if (pl.amount() < 1 || pl.amount() > 1000) e.add(p + "place amount must be 1..1000");
+                if (pl.area() != null) {
+                    Trigger.Region a = pl.area();
+                    if (a.height() < 1 || a.height() > 128) e.add(p + "area height must be 1..128");
+                    long spots = (long) (Math.abs(a.x2() - a.x1()) + 1) * (Math.abs(a.z2() - a.z1()) + 1) * Math.max(1, a.height());
+                    if (spots < pl.amount()) e.add(p + "the area has room for only " + spots + " blocks, but " + pl.amount() + " are needed");
+                }
+            }
             case Trigger.Choice c -> {
                 if (c.options().size() > 4) e.add(p + "more than 4 buttons");
                 if (forPublish && c.options().size() < 2) e.add(p + "a choice needs at least 2 buttons");
@@ -115,6 +129,40 @@ public final class Validation {
             }
             default -> { }
         }
+    }
+
+    /** An item a player can hold, by lowercase key ("wheat") or any name Material.matchMaterial accepts. */
+    public static boolean validItem(String item) {
+        org.bukkit.Material m = item == null ? null : org.bukkit.Material.matchMaterial(item);
+        return m != null && registry(() -> !m.isAir() && m.isItem(), !m.name().endsWith("AIR"));
+    }
+
+    /** An item that places a block. */
+    public static boolean validBlock(String block) {
+        org.bukkit.Material m = block == null ? null : org.bukkit.Material.matchMaterial(block);
+        if (!validItem(block)) return false;
+        return placesAs(m) || registry(m::isBlock, true);
+    }
+
+    /**
+     * isItem/isBlock read Paper's registry, which only exists on a running server. Outside one (unit tests) the
+     * {@code offline} answer is used, so loading and validating quest files still works there.
+     */
+    private static boolean registry(java.util.function.BooleanSupplier check, boolean offline) {
+        try {
+            return check.getAsBoolean();
+        } catch (IllegalStateException | LinkageError noServer) {
+            return offline;
+        }
+    }
+
+    /** Items that are not blocks themselves but place one (torch → wall torch is a block anyway; redstone, string, seeds). */
+    private static boolean placesAs(org.bukkit.Material m) {
+        return switch (m.name()) {
+            case "REDSTONE", "STRING", "WHEAT_SEEDS", "BEETROOT_SEEDS", "MELON_SEEDS", "PUMPKIN_SEEDS", "TORCHFLOWER_SEEDS",
+                 "PITCHER_POD", "CARROT", "POTATO", "SWEET_BERRIES", "GLOW_BERRIES", "COCOA_BEANS" -> true;
+            default -> false;
+        };
     }
 
     private static void targetErrors(Quest q, Target t, String p, List<String> e) {
@@ -150,8 +198,7 @@ public final class Validation {
                 if (all != null && !en.quest().equals(q.id()) && !all.containsKey(en.quest())) e.add(p + "checks unknown quest '" + en.quest() + "'");
             }
             case Cond.HasItem h -> {
-                org.bukkit.Material m = org.bukkit.Material.matchMaterial(h.item());
-                if (m == null || !m.isItem() || m.isAir()) e.add(p + "unknown item '" + h.item() + "'");
+                if (!validItem(h.item())) e.add(p + "unknown item '" + h.item() + "'");
                 if (h.amount() < 1 || h.amount() > 2304) e.add(p + "item amount must be 1..2304");
             }
         }
