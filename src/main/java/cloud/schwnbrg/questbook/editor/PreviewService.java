@@ -3,7 +3,6 @@ package cloud.schwnbrg.questbook.editor;
 import cloud.schwnbrg.questbook.QuestbookPlugin;
 import cloud.schwnbrg.questbook.model.BlockRef;
 import cloud.schwnbrg.questbook.model.Quest;
-import cloud.schwnbrg.questbook.model.Step;
 import cloud.schwnbrg.questbook.model.Trigger;
 import java.util.Map;
 import java.util.UUID;
@@ -42,14 +41,17 @@ public final class PreviewService {
             if (!s.preview || p == null || s.questId == null) continue;
             Quest q = plugin.quests().quest(s.questId);
             if (q == null) continue;
-            for (int i = 0; i < q.steps().size(); i++) draw(p, q.steps().get(i), i == s.step ? CURRENT : OTHER, max);
+            for (int i = 0; i < q.steps().size(); i++) {
+                for (Trigger t : Trigger.leaves(q.steps().get(i).trigger())) draw(p, t, i == s.step ? CURRENT : OTHER, max);
+            }
         }
     }
 
-    private void draw(Player p, Step step, Particle.DustOptions c, double max) {
+    /** Outlines one trigger (sphere, box, sign or block) for this player only. Also used by the player guide. */
+    public static void draw(Player p, Trigger trigger, Particle.DustOptions c, double max) {
         World w = p.getWorld();
         Location pl = p.getLocation();
-        switch (step.trigger()) {
+        switch (trigger) {
             case Trigger.Reach r -> {
                 if (!r.world().equals(w.getName())) return;
                 Location centre = new Location(w, r.x(), r.y(), r.z());
@@ -79,7 +81,7 @@ public final class PreviewService {
         }
     }
 
-    private void cube(Player p, Particle.DustOptions c, BlockRef b, double max) {
+    private static void cube(Player p, Particle.DustOptions c, BlockRef b, double max) {
         if (b == null || !b.world().equals(p.getWorld().getName())) return;
         if (p.getLocation().distance(new Location(p.getWorld(), b.x(), b.y(), b.z())) > max) return;
         int[] budget = {60};
@@ -89,7 +91,7 @@ public final class PreviewService {
         for (double x : xs) for (double y : ys) line(p, c, x, y, zs[0], x, y, zs[1], budget);
     }
 
-    private void line(Player p, Particle.DustOptions c, double ax, double ay, double az, double bx, double by, double bz, int[] budget) {
+    private static void line(Player p, Particle.DustOptions c, double ax, double ay, double az, double bx, double by, double bz, int[] budget) {
         double len = Math.sqrt((bx - ax) * (bx - ax) + (by - ay) * (by - ay) + (bz - az) * (bz - az));
         int n = Math.max(1, (int) (len / 0.5));
         for (int i = 0; i <= n && budget[0] > 0; i++) {
@@ -99,7 +101,7 @@ public final class PreviewService {
         }
     }
 
-    private void dot(Player p, Particle.DustOptions c, double x, double y, double z) {
+    private static void dot(Player p, Particle.DustOptions c, double x, double y, double z) {
         p.spawnParticle(Particle.DUST, x, y, z, 1, 0, 0, 0, 0, c);
     }
 }

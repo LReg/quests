@@ -3,7 +3,11 @@ package cloud.schwnbrg.questbook.editor;
 import cloud.schwnbrg.questbook.QuestbookPlugin;
 import cloud.schwnbrg.questbook.config.Messages;
 import cloud.schwnbrg.questbook.model.BlockRef;
+import cloud.schwnbrg.questbook.model.Cond;
 import cloud.schwnbrg.questbook.model.Quest;
+import cloud.schwnbrg.questbook.model.Rule;
+import cloud.schwnbrg.questbook.model.Target;
+import cloud.schwnbrg.questbook.model.TextVariant;
 import cloud.schwnbrg.questbook.model.QuestStatus;
 import cloud.schwnbrg.questbook.model.Step;
 import cloud.schwnbrg.questbook.model.Trigger;
@@ -27,7 +31,7 @@ import org.bukkit.entity.Player;
 /** All editor mutations. Commands and the GUI both call these methods. Main thread only. */
 public final class EditorService {
 
-    private record Pick(String questId, int step, long expires) {}
+    private record Pick(String questId, int step, int opt, long expires) {}
 
     private final QuestbookPlugin plugin;
     private final QuestRepository repo;
@@ -100,7 +104,7 @@ public final class EditorService {
         for (Quest q : plugin.quests().quests().values()) {
             boolean uses = q.startSign() != null && q.startSign().sameAs(sign);
             for (Step s : q.steps()) {
-                if (s.trigger() instanceof Trigger.SignClick sc && sc.sign() != null && sc.sign().sameAs(sign)) uses = true;
+                for (Trigger lt : Trigger.leaves(s.trigger())) if (lt instanceof Trigger.SignClick sc && sc.sign() != null && sc.sign().sameAs(sign)) uses = true;
             }
             if (uses && !canEdit(p, q)) return false;
         }
@@ -133,6 +137,7 @@ public final class EditorService {
             return null;
         }
         if (after == null) return null;
+        after = cleanReferences(p, after);
         if (after.owner().isBlank() && p.getName().equalsIgnoreCase(after.author())) after = after.withOwner(p.getUniqueId().toString());
         if (after.published()) {
             // a live quest must never be saved in a state players cannot finish: drop it back to draft instead
@@ -167,7 +172,7 @@ public final class EditorService {
         plugin.quests().clampRuns(after);
         // step signs the quest no longer uses are released, so players can break them again
         for (Step s : before.steps()) {
-            if (s.trigger() instanceof Trigger.SignClick sc) plugin.signs().releaseStepSign(sc.sign());
+            for (Trigger lt : Trigger.leaves(s.trigger())) if (lt instanceof Trigger.SignClick sc) plugin.signs().releaseStepSign(sc.sign());
         }
         var adv = plugin.advancements();
         if (before.published() && !after.published()) adv.unregister(after.id());
@@ -222,7 +227,7 @@ public final class EditorService {
             plugin.signs().restore(q.startSign()); // players still see the overridden text otherwise
         }
         for (Step s : q.steps()) {
-            if (s.trigger() instanceof Trigger.SignClick sc && sc.sign() != null && sc.sign().block() != null && !usedElsewhere(sc.sign(), id)) {
+            for (Trigger lt : Trigger.leaves(s.trigger())) if (lt instanceof Trigger.SignClick sc && sc.sign() != null && sc.sign().block() != null && !usedElsewhere(sc.sign(), id)) {
                 plugin.signs().untag(sc.sign().block());
             }
         }
@@ -256,7 +261,7 @@ public final class EditorService {
         for (Quest o : plugin.quests().quests().values()) {
             if (o.id().equals(exceptQuest)) continue;
             if (ref.equals(o.startSign())) return true;
-            for (Step s : o.steps()) if (s.trigger() instanceof Trigger.SignClick sc && ref.equals(sc.sign())) return true;
+            for (Step s : o.steps()) for (Trigger lt : Trigger.leaves(s.trigger())) if (lt instanceof Trigger.SignClick sc && ref.equals(sc.sign())) return true;
         }
         return false;
     }
@@ -356,8 +361,8 @@ public final class EditorService {
         List<String> ids = new ArrayList<>();
         for (Quest q : editableQuests(p)) {
             for (Step s : q.steps()) {
-                if (s.trigger() instanceof Trigger.SignClick sc && sc.sign() != null && sc.sign().sameAs(b)) {
-                    ids.add(q.id());
+                for (Trigger lt : Trigger.leaves(s.trigger())) if (lt instanceof Trigger.SignClick sc && sc.sign() != null && sc.sign().sameAs(b)) {
+                    if (!ids.contains(q.id())) ids.add(q.id());
                     break;
                 }
             }
@@ -367,23 +372,25 @@ public final class EditorService {
 
     // ---------- steps ----------
 
-    public void addStep(Player p, String id, String type, Integer index1) {
+    /** Adds a step (at the end, or at 1-based {@code index1}). Returns the new step's index, or -1. */
+    public int addStep(Player p, String id, String type, Integer index1) {
         String t = type.toUpperCase();
         if (!Trigger.TYPES.contains(t)) {
             p.sendMessage(m.get("editor-bad-type", "types", String.join(", ", Trigger.TYPES)));
-            return;
+            return -1;
         }
+        int[] at = {-1};
         Quest res = mutate(p, id, true, q -> {
-            if (q.steps().size() >= 50) throw new IllegalArgumentException("max 50 steps");
+            int max = Validation.limits().steps();
+            if (q.steps().size() >= max) throw new IllegalArgumentException("max " + max + " steps");
             List<Step> l = new ArrayList<>(q.steps());
-            int at = index1 == null ? l.size() : Math.max(0, Math.min(l.size(), index1 - 1));
-            Trigger trig = Trigger.blank(t);
-            if (trig instanceof Trigger.Reach) trig = new Trigger.Reach(p.getWorld().getName(), p.getLocation().getBlockX() + 0.5, p.getLocation().getBlockY(), p.getLocation().getBlockZ() + 0.5, 5);
-            if (trig instanceof Trigger.Region) trig = new Trigger.Region(p.getWorld().getName(), p.getLocation().getBlockX(), p.getLocation().getBlockZ(), p.getLocation().getBlockX(), p.getLocation().getBlockZ(), p.getLocation().getBlockY(), 4);
-            l.add(at, new Step(List.of("New step"), trig, null));
+            at[0] = index1 == null ? l.size() : Math.max(0, Math.min(l.size(), index1 - 1));
+            l.add(at[0], new Step(List.of("New step"), placed(p, Trigger.blank(t)), null));
             return q.withSteps(l);
         });
-        if (res != null) p.sendMessage(m.get("editor-step-added", "step", String.valueOf(res.steps().size())));
+        if (res == null) return -1;
+        p.sendMessage(m.get("editor-step-added", "step", String.valueOf(at[0] + 1)));
+        return at[0];
     }
 
     public void removeStep(Player p, String id, int i) {
@@ -439,57 +446,110 @@ public final class EditorService {
     }
 
     public void setTriggerType(Player p, String id, int i, String type) {
-        if (!Trigger.TYPES.contains(type.toUpperCase())) {
-            p.sendMessage(m.get("editor-bad-type", "types", String.join(", ", Trigger.TYPES)));
+        setTriggerType(p, id, i, -1, type);
+    }
+
+    /** {@code opt} &gt;= 0 changes the trigger of that WORLD CHOICE option instead of the step's own trigger. */
+    public void setTriggerType(Player p, String id, int i, int opt, String type) {
+        String t = type.toUpperCase();
+        List<String> allowed = opt < 0 ? Trigger.TYPES : Trigger.WORLD_TYPES;
+        if (!allowed.contains(t)) {
+            p.sendMessage(m.get("editor-bad-type", "types", String.join(", ", allowed)));
             return;
         }
-        editStep(p, id, i, true, s -> s.withTrigger(Trigger.blank(type)));
+        editTrigger(p, id, i, opt, true, old -> placed(p, Trigger.blank(t)));
+    }
+
+    /** A blank REACH/REGION starts where the editor stands, like a newly added step. */
+    private static Trigger placed(Player p, Trigger trig) {
+        Location l = p.getLocation();
+        if (trig instanceof Trigger.Reach) return new Trigger.Reach(p.getWorld().getName(), l.getBlockX() + 0.5, l.getBlockY(), l.getBlockZ() + 0.5, 5);
+        if (trig instanceof Trigger.Region) return new Trigger.Region(p.getWorld().getName(), l.getBlockX(), l.getBlockZ(), l.getBlockX(), l.getBlockZ(), l.getBlockY(), 4);
+        return trig;
+    }
+
+    /** The trigger that {@code opt} addresses: the step's own (opt &lt; 0) or a WORLD CHOICE option's. Null if there is none. */
+    public static Trigger triggerAt(Step s, int opt) {
+        if (opt < 0) return s.trigger();
+        return s.trigger() instanceof Trigger.FirstOf f && opt < f.options().size() ? f.options().get(opt).trigger() : null;
+    }
+
+    /** Changes the step's trigger, or the trigger of WORLD CHOICE option {@code opt}. */
+    private void editTrigger(Player p, String id, int i, int opt, boolean structural, UnaryOperator<Trigger> f) {
+        editStep(p, id, i, structural, s -> {
+            if (opt < 0) return s.withTrigger(f.apply(s.trigger()));
+            if (!(s.trigger() instanceof Trigger.FirstOf fo) || opt >= fo.options().size()) throw new IllegalArgumentException("no such option");
+            List<Trigger.Branch> l = new ArrayList<>(fo.options());
+            Trigger.Branch b = l.get(opt);
+            l.set(opt, new Trigger.Branch(b.id(), b.label(), f.apply(b.trigger())));
+            return s.withTrigger(new Trigger.FirstOf(l));
+        });
     }
 
     public void stepHere(Player p, String id, int i, Integer radius) {
+        stepHere(p, id, i, -1, radius);
+    }
+
+    public void stepHere(Player p, String id, int i, int opt, Integer radius) {
         Location l = p.getLocation();
-        editStep(p, id, i, false, s -> {
-            int r = radius != null ? radius : (s.trigger() instanceof Trigger.Reach old ? old.radius() : 5);
-            return s.withTrigger(new Trigger.Reach(l.getWorld().getName(), Math.floor(l.getX()) + 0.5, l.getBlockY(), Math.floor(l.getZ()) + 0.5, clamp(r, 1, 64)));
+        editTrigger(p, id, i, opt, false, t -> {
+            int r = radius != null ? radius : (t instanceof Trigger.Reach old ? old.radius() : 5);
+            return new Trigger.Reach(l.getWorld().getName(), Math.floor(l.getX()) + 0.5, l.getBlockY(), Math.floor(l.getZ()) + 0.5, clamp(r, 1, 64));
         });
     }
 
     public void setRadius(Player p, String id, int i, int r) {
-        editStep(p, id, i, false, s -> {
-            if (!(s.trigger() instanceof Trigger.Reach t)) throw new IllegalArgumentException("step is not REACH");
-            return s.withTrigger(new Trigger.Reach(t.world(), t.x(), t.y(), t.z(), clamp(r, 1, 64)));
+        setRadius(p, id, i, -1, r);
+    }
+
+    public void setRadius(Player p, String id, int i, int opt, int r) {
+        editTrigger(p, id, i, opt, false, tr -> {
+            if (!(tr instanceof Trigger.Reach t)) throw new IllegalArgumentException("step is not REACH");
+            return new Trigger.Reach(t.world(), t.x(), t.y(), t.z(), clamp(r, 1, 64));
         });
+    }
+
+    public void setCorner(Player p, String id, int i, boolean first) {
+        setCorner(p, id, i, -1, first);
     }
 
     /**
      * pos1 resets the base to the editor's feet level, pos2 lowers it if its feet level is lower (spec §5:
      * baseY = min of both). The box contains blocks from baseY up, measured against the player's feet block.
      */
-    public void setCorner(Player p, String id, int i, boolean first) {
+    public void setCorner(Player p, String id, int i, int opt, boolean first) {
         Location l = p.getLocation();
-        editStep(p, id, i, false, s -> {
+        editTrigger(p, id, i, opt, false, tr -> {
             int gy = l.getBlockY(); // feet level, the same coordinate Region.contains() compares
-            if (!(s.trigger() instanceof Trigger.Region t)) {
-                return s.withTrigger(new Trigger.Region(l.getWorld().getName(), l.getBlockX(), l.getBlockZ(), l.getBlockX(), l.getBlockZ(), gy, 4));
+            if (!(tr instanceof Trigger.Region t)) {
+                return new Trigger.Region(l.getWorld().getName(), l.getBlockX(), l.getBlockZ(), l.getBlockX(), l.getBlockZ(), gy, 4);
             }
             int x1 = first ? l.getBlockX() : t.x1(), z1 = first ? l.getBlockZ() : t.z1();
             int x2 = first ? t.x2() : l.getBlockX(), z2 = first ? t.z2() : l.getBlockZ();
             int base = first ? gy : Math.min(t.baseY(), gy);
-            return s.withTrigger(new Trigger.Region(l.getWorld().getName(), x1, z1, x2, z2, base, t.height()));
+            return new Trigger.Region(l.getWorld().getName(), x1, z1, x2, z2, base, t.height());
         });
     }
 
     public void setHeight(Player p, String id, int i, int h) {
-        editStep(p, id, i, false, s -> {
-            if (!(s.trigger() instanceof Trigger.Region t)) throw new IllegalArgumentException("step is not REGION");
-            return s.withTrigger(new Trigger.Region(t.world(), t.x1(), t.z1(), t.x2(), t.z2(), t.baseY(), clamp(h, 1, 128)));
+        setHeight(p, id, i, -1, h);
+    }
+
+    public void setHeight(Player p, String id, int i, int opt, int h) {
+        editTrigger(p, id, i, opt, false, tr -> {
+            if (!(tr instanceof Trigger.Region t)) throw new IllegalArgumentException("step is not REGION");
+            return new Trigger.Region(t.world(), t.x1(), t.z1(), t.x2(), t.z2(), t.baseY(), clamp(h, 1, 128));
         });
     }
 
     public void setBlock(Player p, String id, int i, Block b) {
+        setBlock(p, id, i, -1, b);
+    }
+
+    public void setBlock(Player p, String id, int i, int opt, Block b) {
         Quest q = require(p, id);
         if (q == null || !stepOk(p, q, i)) return;
-        Trigger t = q.steps().get(i).trigger();
+        Trigger t = triggerAt(q.steps().get(i), opt);
         if (t instanceof Trigger.SignClick) {
             if (!(b.getState() instanceof Sign)) {
                 p.sendMessage(m.get("editor-not-a-sign"));
@@ -504,9 +564,9 @@ public final class EditorService {
                 return;
             }
             plugin.signs().tag(b, "step", null);
-            editStep(p, id, i, false, s -> s.withTrigger(new Trigger.SignClick(BlockRef.of(b))));
+            editTrigger(p, id, i, opt, false, x -> new Trigger.SignClick(BlockRef.of(b)));
         } else if (t instanceof Trigger.Interact) {
-            editStep(p, id, i, false, s -> s.withTrigger(new Trigger.Interact(BlockRef.of(b))));
+            editTrigger(p, id, i, opt, false, x -> new Trigger.Interact(BlockRef.of(b)));
         } else {
             p.sendMessage(m.get("editor-not-block-step"));
         }
@@ -545,36 +605,282 @@ public final class EditorService {
         editStep(p, id, i, false, s -> s.withTrigger(new Trigger.Answer(List.copyOf(l))));
     }
 
-    /** KILL trigger: target is a category or an entity type name; amount is clamped to 1..1000. Null keeps the old value. */
     public void setKill(Player p, String id, int i, String target, Integer amount) {
+        setKill(p, id, i, -1, target, amount);
+    }
+
+    /** KILL trigger: target is a category or an entity type name; amount is clamped to 1..1000. Null keeps the old value. */
+    public void setKill(Player p, String id, int i, int opt, String target, Integer amount) {
         String t = target == null ? null : target.strip().toUpperCase();
         if (t != null && !Trigger.Kill.validTarget(t)) {
             p.sendMessage(m.get("editor-bad-kill-target", "target", Messages.esc(target), "categories", String.join(", ", Trigger.Kill.CATEGORIES)));
             return;
         }
-        editStep(p, id, i, false, s -> {
-            Trigger.Kill old = s.trigger() instanceof Trigger.Kill k ? k : new Trigger.Kill("ANY", 5);
-            return s.withTrigger(new Trigger.Kill(t == null ? old.target() : t, clamp(amount == null ? old.amount() : amount, 1, 1000)));
+        editTrigger(p, id, i, opt, false, tr -> {
+            Trigger.Kill old = tr instanceof Trigger.Kill k ? k : new Trigger.Kill("ANY", 5);
+            return new Trigger.Kill(t == null ? old.target() : t, clamp(amount == null ? old.amount() : amount, 1, 1000));
         });
     }
 
     public void setDimension(Player p, String id, int i, World.Environment env) {
-        editStep(p, id, i, false, s -> s.withTrigger(new Trigger.Dimension(env)));
+        setDimension(p, id, i, -1, env);
+    }
+
+    public void setDimension(Player p, String id, int i, int opt, World.Environment env) {
+        editTrigger(p, id, i, opt, false, t -> new Trigger.Dimension(env));
     }
 
     public void setAdvancement(Player p, String id, int i, String key) {
+        setAdvancement(p, id, i, -1, key);
+    }
+
+    public void setAdvancement(Player p, String id, int i, int opt, String key) {
         NamespacedKey k = NamespacedKey.fromString(key.strip().toLowerCase());
         if (k == null || Bukkit.getAdvancement(k) == null) {
             p.sendMessage(m.get("editor-unknown-advancement", "key", Messages.esc(key)));
             return;
         }
-        editStep(p, id, i, false, s -> s.withTrigger(new Trigger.AdvancementDone(k)));
+        editTrigger(p, id, i, opt, false, t -> new Trigger.AdvancementDone(k));
+    }
+
+    // ---------- CHOICE buttons and WORLD CHOICE options ----------
+
+    /** Adds a CHOICE button (max 4) or, on a WORLD CHOICE step, an option with a REACH trigger here (max 3). */
+    public void addOption(Player p, String id, int i, String label) {
+        String l = label == null ? "" : label.strip();
+        editStep(p, id, i, true, s -> switch (s.trigger()) {
+            case Trigger.Choice c -> {
+                if (c.options().size() >= 4) throw new IllegalArgumentException("max 4 buttons");
+                List<Trigger.Option> o = new ArrayList<>(c.options());
+                o.add(new Trigger.Option(null, l.isEmpty() ? "Option " + (o.size() + 1) : l));
+                yield s.withTrigger(new Trigger.Choice(o));
+            }
+            case Trigger.FirstOf f -> {
+                if (f.options().size() >= 3) throw new IllegalArgumentException("max 3 options");
+                List<Trigger.Branch> o = new ArrayList<>(f.options());
+                o.add(new Trigger.Branch(null, l.isEmpty() ? "Option " + (o.size() + 1) : l, placed(p, Trigger.blank("REACH"))));
+                yield s.withTrigger(new Trigger.FirstOf(o));
+            }
+            default -> throw new IllegalArgumentException("step has no options");
+        });
+    }
+
+    public void renameOption(Player p, String id, int i, int opt, String label) {
+        if (label == null || label.isBlank()) return;
+        String l = label.strip();
+        editStep(p, id, i, false, s -> switch (s.trigger()) {
+            case Trigger.Choice c when opt >= 0 && opt < c.options().size() -> {
+                List<Trigger.Option> o = new ArrayList<>(c.options());
+                o.set(opt, new Trigger.Option(o.get(opt).id(), l));
+                yield s.withTrigger(new Trigger.Choice(o));
+            }
+            case Trigger.FirstOf f when opt >= 0 && opt < f.options().size() -> {
+                List<Trigger.Branch> o = new ArrayList<>(f.options());
+                Trigger.Branch b = o.get(opt);
+                o.set(opt, new Trigger.Branch(b.id(), l, b.trigger()));
+                yield s.withTrigger(new Trigger.FirstOf(o));
+            }
+            default -> throw new IllegalArgumentException("no such option");
+        });
+    }
+
+    /** Removes a button/option; conditions that checked it are removed too (and reported). */
+    public void removeOption(Player p, String id, int i, int opt) {
+        editStep(p, id, i, true, s -> switch (s.trigger()) {
+            case Trigger.Choice c when opt >= 0 && opt < c.options().size() -> {
+                List<Trigger.Option> o = new ArrayList<>(c.options());
+                o.remove(opt);
+                yield s.withTrigger(new Trigger.Choice(o));
+            }
+            case Trigger.FirstOf f when opt >= 0 && opt < f.options().size() -> {
+                List<Trigger.Branch> o = new ArrayList<>(f.options());
+                o.remove(opt);
+                yield s.withTrigger(new Trigger.FirstOf(o));
+            }
+            default -> throw new IllegalArgumentException("no such option");
+        });
+    }
+
+    // ---------- where next: conditions, next step, endings ----------
+
+    /** Sets where a step goes when no condition matches; null = the following step (the default). */
+    public void setNext(Player p, String id, int i, Target t) {
+        editStep(p, id, i, true, s -> s.withNext(t));
+    }
+
+    public void addRule(Player p, String id, int i, Cond c, Target t) {
+        editStep(p, id, i, true, s -> {
+            if (s.rules().size() >= Validation.MAX_RULES) throw new IllegalArgumentException("max " + Validation.MAX_RULES + " conditions per step");
+            List<Rule> l = new ArrayList<>(s.rules());
+            l.add(new Rule(c, t));
+            return s.withRules(l);
+        });
+    }
+
+    /** Replaces the condition and/or the target of rule r (null keeps it). */
+    public void setRule(Player p, String id, int i, int r, Cond c, Target t) {
+        editStep(p, id, i, true, s -> {
+            if (r < 0 || r >= s.rules().size()) throw new IllegalArgumentException("no such condition");
+            List<Rule> l = new ArrayList<>(s.rules());
+            Rule old = l.get(r);
+            l.set(r, new Rule(c == null ? old.cond() : c, t == null ? old.target() : t));
+            return s.withRules(l);
+        });
+    }
+
+    public void removeRule(Player p, String id, int i, int r) {
+        editStep(p, id, i, true, s -> {
+            if (r < 0 || r >= s.rules().size()) throw new IllegalArgumentException("no such condition");
+            List<Rule> l = new ArrayList<>(s.rules());
+            l.remove(r);
+            return s.withRules(l);
+        });
+    }
+
+    /** Moves rule r one place up (it is checked earlier). */
+    public void raiseRule(Player p, String id, int i, int r) {
+        editStep(p, id, i, true, s -> {
+            if (r <= 0 || r >= s.rules().size()) return s;
+            List<Rule> l = new ArrayList<>(s.rules());
+            l.add(r - 1, l.remove(r));
+            return s.withRules(l);
+        });
+    }
+
+    // ---------- text variants ----------
+
+    public void addVariant(Player p, String id, int i, Cond c, String text) {
+        List<String> lines = textLines(text);
+        if (lines.isEmpty()) {
+            p.sendMessage(m.get("editor-text-empty"));
+            return;
+        }
+        editStep(p, id, i, false, s -> {
+            if (s.textIf().size() >= Validation.MAX_VARIANTS) throw new IllegalArgumentException("max " + Validation.MAX_VARIANTS + " text variants");
+            List<TextVariant> l = new ArrayList<>(s.textIf());
+            l.add(new TextVariant(c, lines));
+            return s.withTextIf(l);
+        });
+    }
+
+    public void setVariantText(Player p, String id, int i, int v, String text) {
+        List<String> lines = textLines(text);
+        if (lines.isEmpty()) {
+            p.sendMessage(m.get("editor-text-empty"));
+            return;
+        }
+        editStep(p, id, i, false, s -> {
+            if (v < 0 || v >= s.textIf().size()) throw new IllegalArgumentException("no such text variant");
+            List<TextVariant> l = new ArrayList<>(s.textIf());
+            l.set(v, new TextVariant(l.get(v).cond(), lines));
+            return s.withTextIf(l);
+        });
+    }
+
+    public void removeVariant(Player p, String id, int i, int v) {
+        editStep(p, id, i, false, s -> {
+            if (v < 0 || v >= s.textIf().size()) throw new IllegalArgumentException("no such text variant");
+            List<TextVariant> l = new ArrayList<>(s.textIf());
+            l.remove(v);
+            return s.withTextIf(l);
+        });
+    }
+
+    // ---------- guide, required endings ----------
+
+    /** Turns the player guide on or off for a quest (null keeps that part). */
+    public void setGuide(Player p, String id, Boolean particles, Boolean compass) {
+        Quest res = mutate(p, id, false, q -> q.withGuide(new Quest.Guide(particles == null ? q.guide().particles() : particles,
+                compass == null ? q.guide().compass() : compass)));
+        if (res != null) p.sendMessage(m.get("editor-saved"));
+    }
+
+    /** Requires quest {@code other} to have been finished with this ending (null: any ending). Adds the requirement if missing. */
+    public void setRequireEnding(Player p, String id, String other, String ending) {
+        mutate(p, id, false, q -> {
+            if (editable(p, other) == null) throw new IllegalArgumentException("unknown quest " + other);
+            Quest next = q;
+            if (!q.requires().contains(other)) {
+                List<String> r = new ArrayList<>(q.requires());
+                r.add(other);
+                next = q.withRequires(r);
+                if (Validation.errors(next, plugin.quests().quests(), false).stream().anyMatch(e -> e.contains("cycle"))) {
+                    throw new IllegalArgumentException("that would create a requires cycle");
+                }
+            }
+            Map<String, String> re = new java.util.LinkedHashMap<>(next.requireEndings());
+            if (ending == null || ending.isBlank()) re.remove(other);
+            else re.put(other, ending);
+            return next.withRequireEndings(re);
+        });
+    }
+
+    /**
+     * Drops what a change left pointing at nothing: conditions and text variants that check a removed step, button or
+     * answer of this quest, and conditions / next steps that go to a removed step. Says how many were dropped.
+     */
+    private Quest cleanReferences(Player p, Quest q) {
+        int[] dropped = {0};
+        List<Step> out = new ArrayList<>();
+        for (Step s : q.steps()) {
+            List<Rule> rules = new ArrayList<>();
+            for (Rule r : s.rules()) {
+                if (dangling(q, r.cond()) || (!r.target().isEnd() && q.indexOf(r.target().step()) < 0)) dropped[0]++;
+                else rules.add(r);
+            }
+            List<TextVariant> vs = new ArrayList<>();
+            for (TextVariant v : s.textIf()) {
+                if (dangling(q, v.cond())) dropped[0]++;
+                else vs.add(v);
+            }
+            Target next = s.next();
+            if (next != null && !next.isEnd() && q.indexOf(next.step()) < 0) {
+                next = null;
+                dropped[0]++;
+            }
+            out.add(s.withRules(rules).withTextIf(vs).withNext(next));
+        }
+        if (dropped[0] == 0) return q;
+        p.sendMessage(m.get("editor-refs-dropped", "count", String.valueOf(dropped[0])));
+        return q.withSteps(out);
+    }
+
+    private static boolean dangling(Quest q, Cond c) {
+        if (!(c instanceof Cond.Picked pk) || (pk.otherQuest() && !pk.quest().equals(q.id()))) return false;
+        Step s = q.step(pk.step());
+        return s == null || !Validation.pickable(s.trigger(), pk.value());
+    }
+
+    public Describe describe() { return new Describe(m, plugin.quests()::quest); }
+
+    /** /qe map: the quest's flow as chat lines, one block per step. */
+    public void printMap(Player p, String id) {
+        Quest q = require(p, id);
+        if (q == null) return;
+        Describe d = describe();
+        p.sendMessage(m.get("map-head", "title", q.title()));
+        for (int i = 0; i < q.steps().size(); i++) {
+            Step s = q.steps().get(i);
+            p.sendMessage(m.get("map-step", "n", String.valueOf(i + 1), "type", s.trigger().type(), "first", Messages.esc(Describe.first(s))));
+            for (Rule r : s.rules()) {
+                p.sendMessage(m.get("map-rule", "colour", Describe.COLOURS.get(Describe.colour(q, r.cond())),
+                        "cond", Messages.esc(d.cond(q, r.cond())), "target", Messages.esc(d.target(q, i, r.target()))));
+            }
+            if (!s.rules().isEmpty() || s.next() != null || i == q.steps().size() - 1) {
+                p.sendMessage(m.get(s.rules().isEmpty() ? "map-then" : "map-otherwise", "target", Messages.esc(d.target(q, i, s.next()))));
+            }
+        }
+        for (String w : Validation.flowWarnings(q)) p.sendMessage(m.get("editor-problem", "problem", Messages.esc("warning: " + w)));
     }
 
     // ---------- pick block (GUI) ----------
 
     public void startPick(Player p, String id, int step) {
-        picks.put(p.getUniqueId(), new Pick(id, step, System.currentTimeMillis() + 30_000));
+        startPick(p, id, step, -1);
+    }
+
+    public void startPick(Player p, String id, int step, int opt) {
+        picks.put(p.getUniqueId(), new Pick(id, step, opt, System.currentTimeMillis() + 30_000));
         p.closeInventory();
         p.sendMessage(m.get("editor-pick"));
     }
@@ -585,8 +891,9 @@ public final class EditorService {
         if (pk == null) return false;
         picks.remove(p.getUniqueId());
         if (System.currentTimeMillis() > pk.expires()) return false;
-        setBlock(p, pk.questId(), pk.step(), b);
-        plugin.menus().openStep(p, pk.questId(), pk.step());
+        setBlock(p, pk.questId(), pk.step(), pk.opt(), b);
+        if (pk.opt() >= 0) plugin.menus().openOption(p, pk.questId(), pk.step(), pk.opt());
+        else plugin.menus().openStep(p, pk.questId(), pk.step());
         return true;
     }
 
@@ -606,19 +913,21 @@ public final class EditorService {
     public List<String> warnings(Quest q) {
         List<String> out = new ArrayList<>();
         for (int i = 0; i < q.steps().size(); i++) {
-            Trigger t = q.steps().get(i).trigger();
-            String world = switch (t) {
-                case Trigger.Reach r -> r.world();
-                case Trigger.Region r -> r.world();
-                case Trigger.SignClick s -> s.sign() == null ? null : s.sign().world();
-                case Trigger.Interact in -> in.block() == null ? null : in.block().world();
-                default -> null;
-            };
-            if (world != null && Bukkit.getWorld(world) == null) out.add("step " + (i + 1) + ": world '" + world + "' is not loaded");
-            if (t instanceof Trigger.AdvancementDone a && Bukkit.getAdvancement(a.key()) == null) {
-                out.add("step " + (i + 1) + ": unknown advancement " + a.key());
+            for (Trigger t : Trigger.leaves(q.steps().get(i).trigger())) {
+                String world = switch (t) {
+                    case Trigger.Reach r -> r.world();
+                    case Trigger.Region r -> r.world();
+                    case Trigger.SignClick s -> s.sign() == null ? null : s.sign().world();
+                    case Trigger.Interact in -> in.block() == null ? null : in.block().world();
+                    default -> null;
+                };
+                if (world != null && Bukkit.getWorld(world) == null) out.add("step " + (i + 1) + ": world '" + world + "' is not loaded");
+                if (t instanceof Trigger.AdvancementDone a && Bukkit.getAdvancement(a.key()) == null) {
+                    out.add("step " + (i + 1) + ": unknown advancement " + a.key());
+                }
             }
         }
+        out.addAll(Validation.flowWarnings(q));
         return out;
     }
 

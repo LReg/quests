@@ -130,9 +130,20 @@ public final class AdvancementSync {
         String parent = parentQuest == null ? key(ROOT).asString() : questKey(parentQuest).asString();
         String frame = quest.steps().size() >= 5 ? "goal" : "task";
         return "{\"parent\":" + q(parent) + ",\"display\":{\"icon\":{\"id\":\"minecraft:written_book\"},\"title\":" + component(plain(quest.title()))
-                + ",\"description\":" + component(plain(quest.summary().isBlank() ? quest.title() : quest.summary())) + ",\"frame\":\"" + frame
+                + ",\"description\":" + component(description(quest)) + ",\"frame\":\"" + frame
                 + "\",\"show_toast\":true,\"announce_to_chat\":false,\"hidden\":true},\"criteria\":{\"" + CRITERION
                 + "\":{\"trigger\":\"minecraft:impossible\"}}}";
+    }
+
+    /**
+     * The tooltip text: the summary as one line, cut at 200 characters. Summaries up to 200 chars on one line (all
+     * quests from before 1.2) come out exactly as before, so their advancement does not count as changed.
+     */
+    static String description(Quest quest) {
+        String s = plain(quest.summary().isBlank() ? quest.title() : quest.summary()).replaceAll("\\s*\\n\\s*", " ").strip();
+        if (s.length() <= 200) return s;
+        int cut = s.lastIndexOf(' ', 199);
+        return s.substring(0, cut > 120 ? cut : 199) + "…";
     }
 
     private void load(Quest quest) {

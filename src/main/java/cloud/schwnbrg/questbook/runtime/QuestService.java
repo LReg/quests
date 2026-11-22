@@ -2,7 +2,11 @@ package cloud.schwnbrg.questbook.runtime;
 
 import cloud.schwnbrg.questbook.QuestbookPlugin;
 import cloud.schwnbrg.questbook.config.Messages;
+import cloud.schwnbrg.questbook.model.Cond;
 import cloud.schwnbrg.questbook.model.Quest;
+import cloud.schwnbrg.questbook.model.Rule;
+import cloud.schwnbrg.questbook.model.Target;
+import cloud.schwnbrg.questbook.model.TextVariant;
 import cloud.schwnbrg.questbook.model.Step;
 import cloud.schwnbrg.questbook.model.Trigger;
 import cloud.schwnbrg.questbook.storage.Database;
@@ -28,10 +32,12 @@ import net.kyori.adventure.key.Key;
 import org.bukkit.Bukkit;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
+import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
 import org.bukkit.advancement.Advancement;
 import org.bukkit.block.Block;
 import org.bukkit.entity.Player;
+import org.bukkit.inventory.ItemStack;
 
 /** The quest state machine: acceptance, step delivery, arming and trigger evaluation. Main thread only. */
 public final class QuestService {
@@ -87,13 +93,20 @@ public final class QuestService {
                 if (pr.state() != Progress.State.ACTIVE) continue;
                 Quest q = quests.get(pr.questId());
                 if (q == null || q.steps().isEmpty()) continue;
-                if (pr.step() >= q.steps().size()) {
-                    // the quest got shorter while the player was away: keep the stored step in range too
-                    pr = pr.with(Progress.State.ACTIVE, q.steps().size() - 1, System.currentTimeMillis());
+                // the quest was edited while the player was away: the step they were on is found by its id, the
+                // index alone could now point at another step; a deleted step falls back to the old index, kept in range
+                int at = pr.path().isEmpty() ? -1 : q.indexOf(pr.path().getLast());
+                if (at < 0) at = Math.min(pr.step(), q.steps().size() - 1);
+                if (at != pr.step()) {
+                    pr = pr.with(Progress.State.ACTIVE, at, System.currentTimeMillis());
                     d.progress.put(q.id(), pr);
                     db.saveProgress(id, pr);
                 }
                 Run r = new Run(q.id(), pr.step(), false);
+                r.choices.putAll(pr.choices());
+                r.path.addAll(pr.path());
+                // progress from before 1.2 has no path; quests were linear then, so it is steps 1..current
+                if (r.path.isEmpty()) for (int i = 0; i <= pr.step(); i++) r.path.add(q.steps().get(i).id());
                 mine.put(q.id(), r);
                 if (q.published()) startStep(p, r);
             }
@@ -107,6 +120,7 @@ public final class QuestService {
         delivery.cancel(id);
         forgetPlayer(id);
         plugin.signs().forget(id);
+        plugin.guide().quit(p);
     }
 
     /** Every per-player map in one place, so a new one cannot be forgotten on quit. */
@@ -127,7 +141,7 @@ public final class QuestService {
         if (d == null) return SignState.DRAFT;
         Progress pr = d.progress.get(q.id());
         if (pr != null && pr.state() == Progress.State.ACTIVE) return SignState.ACTIVE;
-        for (String r : q.requires()) if (!completed(d, r)) return SignState.LOCKED;
+        for (String r : q.requires()) if (!meets(d, q, r)) return SignState.LOCKED;
         if (pr != null && pr.state() == Progress.State.COMPLETED) {
             return q.repeatable() ? SignState.COMPLETED_REPEATABLE : SignState.COMPLETED;
         }
@@ -139,13 +153,21 @@ public final class QuestService {
         return pr != null && pr.completions() > 0;
     }
 
+    /** The requirement {@code req} of quest q is met: finished, and with the right ending if q asks for one. */
+    private static boolean meets(PlayerData d, Quest q, String req) {
+        if (!completed(d, req)) return false;
+        String want = q.requireEndings().get(req);
+        return want == null || want.equals(d.progress.get(req).ending());
+    }
+
     public Denial canAccept(Player p, Quest q) {
         PlayerData d = data(p);
         if (d == null || !q.published()) return new Denial("not-available");
         for (String r : q.requires()) {
-            if (!completed(d, r)) {
+            if (!meets(d, q, r)) {
                 Quest rq = quests.get(r);
-                return new Denial("locked", "quest", Messages.esc(rq == null ? r : rq.title()));
+                String title = rq == null ? r : rq.title();
+                return completed(d, r) ? new Denial("locked-ending", "quest", title) : new Denial("locked", "quest", title);
             }
         }
         Progress pr = d.progress.get(q.id());
@@ -192,13 +214,16 @@ public final class QuestService {
         PlayerData d = data(p);
         long now = System.currentTimeMillis();
         Progress old = d.progress.get(q.id());
+        // a replay starts with no choices; the last completion (ending, choices, path) stays until a new one replaces it
         Progress pr = new Progress(q.id(), Progress.State.ACTIVE, 0, now, now, old == null ? 0 : old.completions(),
-                old == null ? 0 : old.lastCompletedAt());
+                old == null ? 0 : old.lastCompletedAt(), Map.of(), List.of(q.steps().get(0).id()), old == null ? null : old.ending(),
+                old == null ? Map.of() : old.doneChoices(), old == null ? List.of() : old.donePath());
         d.progress.put(q.id(), pr);
         db.saveProgress(p.getUniqueId(), pr);
         db.addEvent(p.getUniqueId(), q.id(), "START", 0);
         plugin.export().send("START", q, p, 0);
         Run r = new Run(q.id(), 0, false);
+        r.path.add(q.steps().get(0).id());
         runs.computeIfAbsent(p.getUniqueId(), k -> new HashMap<>()).put(q.id(), r);
         p.showTitle(Title.title(m.get("quest-started-title"), m.get("quest-started-subtitle", "title", q.title())));
         plugin.signs().refresh(p, q.id());
@@ -270,6 +295,7 @@ public final class QuestService {
         Run old = tests.remove(p.getUniqueId());
         if (old != null) delivery.cancel(p.getUniqueId(), old);
         Run r = new Run(q.id(), 0, true);
+        r.path.add(q.steps().get(0).id());
         tests.put(p.getUniqueId(), r);
         p.sendMessage(m.get("test-prefix").append(m.get("test-started", "quest", q.title())));
         startStep(p, r);
@@ -283,14 +309,37 @@ public final class QuestService {
         }
     }
 
-    public void skip(Player p) {
+    /**
+     * Test runs: finishes the current step. On a CHOICE or WORLD CHOICE step {@code option} (1-based) says which
+     * button/option counts as picked; without it the first one is used.
+     */
+    public void skip(Player p, Integer option) {
         Run r = tests.get(p.getUniqueId());
         if (r == null) {
             p.sendMessage(m.get("test-none"));
             return;
         }
+        Quest q = quests.get(r.questId);
+        if (q == null || r.step >= q.steps().size()) return;
         delivery.cancel(p.getUniqueId(), r);
-        completeStep(p, r);
+        List<String> ids = optionIds(q.steps().get(r.step).trigger());
+        String picked = null;
+        if (!ids.isEmpty()) {
+            int i = option == null ? 0 : Math.max(0, Math.min(ids.size() - 1, option - 1));
+            picked = ids.get(i);
+            p.sendMessage(m.get("test-prefix").append(m.get("test-picked", "option", String.valueOf(i + 1))));
+        }
+        r.armed = true; // a step skipped while its text was still being told
+        completeStep(p, r, picked);
+    }
+
+    /** Option ids of a CHOICE or WORLD CHOICE trigger, empty for any other trigger. */
+    private static List<String> optionIds(Trigger t) {
+        return switch (t) {
+            case Trigger.Choice c -> c.options().stream().map(Trigger.Option::id).toList();
+            case Trigger.FirstOf f -> f.options().stream().map(Trigger.Branch::id).toList();
+            default -> List.of();
+        };
     }
 
     // ---------- steps ----------
@@ -339,14 +388,20 @@ public final class QuestService {
         return q.steps().get(r.step);
     }
 
+    /** The text a step tells this player: the first text variant whose condition is true, else the normal text. */
+    public List<String> textFor(Player p, Run r, Step s) {
+        for (TextVariant v : s.textIf()) if (test(p, r, v.cond())) return v.text();
+        return s.text();
+    }
+
     private void startStep(Player p, Run r) {
         Quest q = quests.get(r.questId);
         if (q == null || r.step >= q.steps().size()) return;
         r.armed = false;
-        r.count = 0;
+        r.counts.clear();
         delivery.cancel(p.getUniqueId(), r); // a re-delivery (republish) must not double up
         Step s = q.steps().get(r.step);
-        List<Component> lines = lines(r, s.text());
+        List<Component> lines = lines(r, textFor(p, r, s));
         Component footer = footer(p.getUniqueId(), r, s);
         if (footer != null) lines.add(footer);
         int step = r.step;
@@ -369,6 +424,16 @@ public final class QuestService {
         } else if (s.trigger() instanceof Trigger.Answer) {
             f = f.append(m.get("btn-answer").clickEvent(ClickEvent.suggestCommand("/quest answer ")));
             any = true;
+        } else if (s.trigger() instanceof Trigger.Choice c) {
+            for (Trigger.Option o : c.options()) {
+                if (any) f = f.append(Component.text(" "));
+                f = f.append(m.get("btn-choice", "label", o.label()).clickEvent(ClickEvent.callback(a -> {
+                    Player cur = Bukkit.getPlayer(id);
+                    if (cur != null) choose(cur, r.questId, step, o.id());
+                    // a choice can wait for a long time (AFK); the journal has the same buttons without a time limit
+                }, ClickCallback.Options.builder().uses(1).lifetime(Duration.ofHours(24)).build())));
+                any = true;
+            }
         }
         if (s.hint() != null && !s.hint().isBlank()) {
             if (any) f = f.append(Component.text(" "));
@@ -392,15 +457,33 @@ public final class QuestService {
         checkImmediate(p, r);
     }
 
+    /** A step's trigger as (option id, trigger) parts: one part with no option, or one per WORLD CHOICE option. */
+    private record Part(String option, Trigger trigger) {}
+
+    private static List<Part> parts(Trigger t) {
+        if (t instanceof Trigger.FirstOf f) {
+            List<Part> out = new ArrayList<>(f.options().size());
+            for (Trigger.Branch b : f.options()) out.add(new Part(b.id(), b.trigger()));
+            return out;
+        }
+        return List.of(new Part(null, t));
+    }
+
     private void checkImmediate(Player p, Run r) {
         Quest q = quests.get(r.questId);
         if (q == null || r.step >= q.steps().size() || p.getGameMode() == GameMode.SPECTATOR) return;
-        Trigger t = q.steps().get(r.step).trigger();
-        if (t instanceof Trigger.AdvancementDone a) {
-            Advancement adv = Bukkit.getAdvancement(a.key());
-            if (adv != null && p.getAdvancementProgress(adv).isDone()) completeStep(p, r);
-        } else if (matchesLocation(p.getLocation(), t)) {
-            completeStep(p, r);
+        for (Part part : parts(q.steps().get(r.step).trigger())) {
+            Trigger t = part.trigger();
+            if (t instanceof Trigger.AdvancementDone a) {
+                Advancement adv = Bukkit.getAdvancement(a.key());
+                if (adv != null && p.getAdvancementProgress(adv).isDone()) {
+                    completeStep(p, r, part.option());
+                    return;
+                }
+            } else if (matchesLocation(p.getLocation(), t)) {
+                completeStep(p, r, part.option());
+                return;
+            }
         }
     }
 
@@ -416,36 +499,131 @@ public final class QuestService {
             Quest q = quests.get(r.questId);
             if (onlyStep >= 0 && r.step != onlyStep) return;
             if (r.armed && q != null && r.step < q.steps().size() && q.steps().get(r.step).trigger() instanceof Trigger.Continue) {
-                completeStep(p, r);
+                completeStep(p, r, null);
             }
             return;
         }
     }
 
-    private void completeStep(Player p, Run r) {
+    /**
+     * A CHOICE button was clicked (chat button, journal or /quest choose). Only counts on an armed CHOICE step that has
+     * this option; {@code onlyStep} &gt;= 0 makes an old button a no-op once the player has moved on.
+     */
+    public boolean choose(Player p, String questId, int onlyStep, String option) {
+        for (Run r : runsOf(p)) {
+            if (!r.questId.equals(questId)) continue;
+            Quest q = quests.get(r.questId);
+            if (q == null || r.step >= q.steps().size() || (onlyStep >= 0 && r.step != onlyStep)) return false;
+            if (r.armed && q.steps().get(r.step).trigger() instanceof Trigger.Choice c && c.option(option) != null) {
+                completeStep(p, r, option);
+                return true;
+            }
+            return false;
+        }
+        return false;
+    }
+
+    // ---------- conditions and routing ----------
+
+    /** True if the condition holds for this player and run. Never changes anything (items are taken in {@link #route}). */
+    public boolean test(Player p, Run r, Cond c) {
+        boolean v = switch (c) {
+            case Cond.Picked pk -> {
+                if (!pk.otherQuest() || pk.quest().equals(r.questId)) yield pk.value().equals(r.choices.get(pk.step()));
+                PlayerData d = data(p);
+                Progress pr = d == null ? null : d.progress.get(pk.quest());
+                // what the player picked in their finished run; a replay in progress does not change it
+                yield pr != null && pk.value().equals(pr.finishedOrCurrentChoices().get(pk.step()));
+            }
+            case Cond.Ending en -> {
+                PlayerData d = data(p);
+                Progress pr = d == null ? null : d.progress.get(en.quest());
+                yield pr != null && pr.completions() > 0 && en.ending().equals(pr.ending());
+            }
+            case Cond.HasItem h -> {
+                Material mat = Material.matchMaterial(h.item());
+                yield mat != null && count(p, mat) >= h.amount();
+            }
+        };
+        return c.not() != v;
+    }
+
+    private static int count(Player p, Material mat) {
+        int n = 0;
+        for (ItemStack it : p.getInventory().getStorageContents()) if (it != null && it.getType() == mat) n += it.getAmount();
+        ItemStack off = p.getInventory().getItemInOffHand();
+        if (off.getType() == mat) n += off.getAmount();
+        return n;
+    }
+
+    /** Takes {@code amount} items from the storage slots and, for what is left, the off hand ({@link #count} counts both). */
+    private static void take(Player p, Material mat, int amount) {
+        int left = 0;
+        for (ItemStack rest : p.getInventory().removeItem(new ItemStack(mat, amount)).values()) left += rest.getAmount();
+        if (left <= 0) return;
+        ItemStack off = p.getInventory().getItemInOffHand();
+        if (off.getType() != mat) return;
+        if (off.getAmount() <= left) p.getInventory().setItemInOffHand(null);
+        else off.setAmount(off.getAmount() - left);
+    }
+
+    /** Where the player goes after step i: the first rule whose condition is true, otherwise the step's next. */
+    private Target route(Player p, Run r, Quest q, int i) {
+        Step s = q.steps().get(i);
+        for (Rule rule : s.rules()) {
+            if (!test(p, r, rule.cond())) continue;
+            if (rule.cond() instanceof Cond.HasItem h && h.take() && !h.not() && !r.test) {
+                Material mat = Material.matchMaterial(h.item());
+                if (mat != null) take(p, mat, h.amount());
+            }
+            return rule.target();
+        }
+        return q.fallThrough(i);
+    }
+
+    /**
+     * The step's trigger fired. {@code picked} is the button, option or accepted answer, remembered for conditions.
+     * Tells the after-text, then goes where the step's conditions or next step say (or finishes the quest).
+     */
+    private void completeStep(Player p, Run r, String picked) {
         Quest q = quests.get(r.questId);
-        if (q == null || !live(p, r)) return;
+        if (q == null || !live(p, r) || r.step >= q.steps().size()) return;
         r.armed = false;
         playSound(p, "sounds.step_complete");
-        int next = r.step + 1;
         int finished = r.step;
-        List<Component> after = lines(r, q.steps().get(finished).after());
+        Step done = q.steps().get(finished);
+        if (picked != null) {
+            // a step met again in a loop: the new pick counts and moves to the end of the order
+            r.choices.remove(done.id());
+            r.choices.put(done.id(), picked);
+        }
+        List<Component> after = lines(r, done.after());
         if (!r.test) {
             db.addEvent(p.getUniqueId(), q.id(), "STEP", r.step);
         }
-        if (next >= q.steps().size()) {
+        Target to = route(p, r, q, finished);
+        int next = to.isEnd() ? -1 : q.indexOf(to.step());
+        if (!to.isEnd() && next < 0) {
+            // a target that vanished (hand-edited file): behave like a quest without branching
+            next = finished + 1 < q.steps().size() ? finished + 1 : -1;
+        }
+        if (next < 0) {
+            String ending = to.isEnd() ? to.ending() : null;
             // the closing text is told first, then the quest completes (title, sound, advancement)
-            if (after.isEmpty()) completeQuest(p, r, q);
+            if (after.isEmpty()) completeQuest(p, r, q, ending);
             else delivery.deliver(p, r, after, () -> {
-                if (live(p, r) && r.step == finished) completeQuest(p, r, q);
+                if (live(p, r) && r.step == finished) completeQuest(p, r, q, ending);
             });
             return;
         }
-        r.step = next;
+        int target = next;
+        r.step = target;
+        r.path.add(q.steps().get(target).id());
+        if (r.path.size() > Progress.MAX_PATH) r.path.removeFirst();
         if (!r.test) {
             PlayerData d = data(p);
             Progress pr = d.progress.get(q.id());
-            Progress np = pr.with(Progress.State.ACTIVE, next, System.currentTimeMillis());
+            Progress np = pr.with(Progress.State.ACTIVE, target, System.currentTimeMillis()).withRun(r.choices, r.path);
             d.progress.put(q.id(), np);
             db.saveProgress(p.getUniqueId(), np);
             plugin.signs().refresh(p, q.id());
@@ -453,32 +631,36 @@ public final class QuestService {
         // the "after" text of the finished step comes before the text of the next one
         if (after.isEmpty()) startStep(p, r);
         else delivery.deliver(p, r, after, () -> {
-            if (live(p, r) && r.step == next) startStep(p, r);
+            if (live(p, r) && r.step == target && !r.armed) startStep(p, r);
         });
     }
 
-    private void completeQuest(Player p, Run r, Quest q) {
+    private void completeQuest(Player p, Run r, Quest q, String ending) {
         if (r.test) {
             tests.remove(p.getUniqueId());
-            p.sendMessage(m.get("test-prefix").append(m.get("test-finished")));
+            p.sendMessage(m.get("test-prefix").append(ending == null ? m.get("test-finished") : m.get("test-finished-ending", "ending", ending)));
             return;
         }
         PlayerData d = data(p);
         long now = System.currentTimeMillis();
         Progress pr = d.progress.get(q.id());
-        Progress np = new Progress(q.id(), Progress.State.COMPLETED, 0, pr.startedAt(), now, pr.completions() + 1, now);
+        Progress np = new Progress(q.id(), Progress.State.COMPLETED, 0, pr.startedAt(), now, pr.completions() + 1, now, r.choices, r.path, ending,
+                r.choices, r.path);
         d.progress.put(q.id(), np);
         db.saveProgress(p.getUniqueId(), np);
         db.addEvent(p.getUniqueId(), q.id(), "COMPLETE", q.steps().size());
         runs.get(p.getUniqueId()).remove(q.id());
-        p.showTitle(Title.title(m.get("quest-complete-title"), m.get("quest-complete-subtitle", "title", q.title())));
+        if (q.id().equals(d.tracked)) d.tracked = null;
+        Component sub = ending == null ? m.get("quest-complete-subtitle", "title", q.title())
+                : m.get("quest-complete-ending-subtitle", "title", q.title(), "ending", ending);
+        p.showTitle(Title.title(m.get("quest-complete-title"), sub));
         playSound(p, "sounds.quest_complete");
         plugin.advancements().grant(p, q);
         db.claimChronicle(q.id(), p.getUniqueId(), p.getName()).thenAccept(first -> {
             if (first) Bukkit.getScheduler().runTask(plugin, () -> { plugin.setChronicle(q.id(), p.getName()); Bukkit.broadcast(
                     m.get("chronicle-first", "player", Messages.esc(p.getName()), "title", q.title())); });
         });
-        plugin.export().send("COMPLETE", q, p, q.steps().size());
+        plugin.export().send("COMPLETE", q, p, q.steps().size(), ending);
         plugin.signs().refresh(p, q.id());
         for (Quest other : quests.values()) if (other.requires().contains(q.id())) plugin.signs().refresh(p, other.id());
     }
@@ -527,18 +709,25 @@ public final class QuestService {
         if (!r.armed) return false;
         Quest q = quests.get(r.questId);
         if (q == null || r.step >= q.steps().size() || (!r.test && !q.published())) return false;
-        return kind.test(q.steps().get(r.step).trigger());
+        Trigger t = q.steps().get(r.step).trigger();
+        if (t instanceof Trigger.FirstOf f) {
+            for (Trigger.Branch b : f.options()) if (kind.test(b.trigger())) return true;
+            return false;
+        }
+        return kind.test(t);
     }
 
-    /** Completes the first armed step whose trigger matches. */
+    /** Completes the first armed step one of whose triggers matches. */
     private boolean fire(Player p, Predicate<Trigger> match) {
         if (!eligible(p)) return false;
         for (Run r : runsOf(p)) {
             Step s = armedStep(r);
             if (s == null) continue;
-            if (match.test(s.trigger())) {
-                completeStep(p, r);
-                return true;
+            for (Part part : parts(s.trigger())) {
+                if (match.test(part.trigger())) {
+                    completeStep(p, r, part.option());
+                    return true;
+                }
             }
         }
         return false;
@@ -558,7 +747,7 @@ public final class QuestService {
     private static final Predicate<Trigger> LOCATION_TRIGGER =
             t -> t instanceof Trigger.Reach || t instanceof Trigger.Region || t instanceof Trigger.Dimension;
 
-    /** A player killed something. Counts towards every armed KILL step it matches; the count is kept per run in memory. */
+    /** A player killed something. Counts towards every armed KILL trigger it matches; the counts are kept per run in memory. */
     public void onKill(Player p, org.bukkit.entity.LivingEntity victim) {
         if (!eligible(p) || victim == p || victim instanceof org.bukkit.entity.ArmorStand) return;
         String type = victim.getType().name();
@@ -568,12 +757,15 @@ public final class QuestService {
         for (Run r : runsOf(p)) {
             Step s = armedStep(r);
             if (s == null) continue;
-            if (!(s.trigger() instanceof Trigger.Kill k) || !k.matches(type, animal, enemy, player)) continue;
-            r.count++;
-            if (r.count >= k.amount()) {
-                completeStep(p, r);
-            } else {
-                p.sendActionBar(prefixed(r, m.get("kill-progress", "count", String.valueOf(r.count), "total", String.valueOf(k.amount()))));
+            for (Part part : parts(s.trigger())) {
+                if (!(part.trigger() instanceof Trigger.Kill k) || !k.matches(type, animal, enemy, player)) continue;
+                String key = part.option() == null ? "" : part.option();
+                int n = r.counts.merge(key, 1, Integer::sum);
+                if (n >= k.amount()) {
+                    completeStep(p, r, part.option());
+                    break;
+                }
+                p.sendActionBar(prefixed(r, m.get("kill-progress", "count", String.valueOf(n), "total", String.valueOf(k.amount()))));
             }
         }
     }
@@ -603,20 +795,24 @@ public final class QuestService {
             Quest q = quests.get(r.questId);
             if (q == null || r.step >= q.steps().size()) continue;
             Step s = q.steps().get(r.step);
-            boolean hit = sign ? s.trigger() instanceof Trigger.SignClick sc && sc.sign() != null && sc.sign().sameAs(b)
-                    : s.trigger() instanceof Trigger.Interact in && in.block() != null && in.block().sameAs(b);
-            if (!hit) continue;
-            target = true;
-            if (r.armed) {
-                completeStep(p, r);
-                return true;
+            for (Part part : parts(s.trigger())) {
+                Trigger t = part.trigger();
+                boolean hit = sign ? t instanceof Trigger.SignClick sc && sc.sign() != null && sc.sign().sameAs(b)
+                        : t instanceof Trigger.Interact in && in.block() != null && in.block().sameAs(b);
+                if (!hit) continue;
+                target = true;
+                if (r.armed) {
+                    completeStep(p, r, part.option());
+                    return true;
+                }
+                if (s.hint() != null && !s.hint().isBlank()) p.sendMessage(prefixed(r, m.get("hint-line", "hint", Messages.esc(s.hint()))));
+                break;
             }
-            if (s.hint() != null && !s.hint().isBlank()) p.sendMessage(prefixed(r, m.get("hint-line", "hint", Messages.esc(s.hint()))));
         }
         return target;
     }
 
-    /** /quest answer. Returns false if the player had no armed ANSWER step. */
+    /** /quest answer. Returns false if the player had no armed ANSWER step. The accepted answer is remembered for conditions. */
     public boolean answer(Player p, String text) {
         if (!eligible(p)) return false;
         String norm = Trigger.normalize(text);
@@ -628,7 +824,7 @@ public final class QuestService {
                 any = true;
                 for (String answer : a.answers()) {
                     if (Trigger.normalize(answer).equals(norm)) {
-                        completeStep(p, r);
+                        completeStep(p, r, norm);
                         return true;
                     }
                 }
@@ -639,10 +835,12 @@ public final class QuestService {
         return false;
     }
 
-    /** True if the player is on an armed SIGN step targeting this block, used to decide cancelling. */
+    /** True if any quest uses this block as a SIGN trigger (also inside a world choice), used to decide cancelling. */
     public boolean isStepSign(Block b) {
         for (Quest q : quests.values()) {
-            for (Step s : q.steps()) if (s.trigger() instanceof Trigger.SignClick sc && sc.sign() != null && sc.sign().sameAs(b)) return true;
+            for (Step s : q.steps()) {
+                for (Trigger t : Trigger.leaves(s.trigger())) if (t instanceof Trigger.SignClick sc && sc.sign() != null && sc.sign().sameAs(b)) return true;
+            }
         }
         return false;
     }
@@ -664,8 +862,14 @@ public final class QuestService {
             if (q.steps().isEmpty()) {
                 e.getValue().remove(q.id());
                 delivery.cancel(e.getKey(), r);
-            } else if (r.step >= q.steps().size()) {
-                r.step = q.steps().size() - 1;
+            } else {
+                // steps were inserted, moved or deleted: follow the current step by its id; a deleted one keeps the
+                // old index, kept in range
+                int at = r.path.isEmpty() ? -1 : q.indexOf(r.path.getLast());
+                if (at < 0) at = Math.min(r.step, q.steps().size() - 1);
+                if (at == r.step) continue;
+                r.step = at;
+                if (r.test) continue;
                 // keep the stored progress in step with the run
                 PlayerData d = data.get(e.getKey());
                 Progress pr = d == null ? null : d.progress.get(q.id());
@@ -729,7 +933,7 @@ public final class QuestService {
         PlayerData d = data(p);
         if (d == null) return null;
         for (String r : q.requires()) {
-            if (!completed(d, r)) return quests.get(r);
+            if (!meets(d, q, r)) return quests.get(r);
         }
         return null;
     }

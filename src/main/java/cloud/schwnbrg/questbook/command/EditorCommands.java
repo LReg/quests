@@ -97,7 +97,7 @@ public final class EditorCommands {
         qe.then(Commands.literal("summary").then(id().executes(c -> player(c, (p, x) -> {
             Quest q = ed.editable(p, s(x, "id"));
             if (q == null) return;
-            plugin.dialogs().textInput(p, title("input-title-summary"), q.summary(), true, t -> ed.setSummary(p, q.id(), String.join(" ", t.split("\n")).strip()), () -> { });
+            plugin.dialogs().textInput(p, title("input-title-summary"), q.summary(), true, t -> ed.setSummary(p, q.id(), t.strip()), () -> { });
         }))));
         qe.then(Commands.literal("sign")
                 .then(Commands.literal("start").then(id().executes(c -> player(c, (p, x) -> ed.linkStartSign(p, s(x, "id"))))))
@@ -125,7 +125,15 @@ public final class EditorCommands {
                     if (q == null) p.sendMessage(m().get("editor-unknown-quest", "quest", Messages.esc(s(x, "id"))));
                     else plugin.quests().startTest(p, q);
                 }))));
-        qe.then(Commands.literal("skip").executes(c -> player(c, (p, x) -> plugin.quests().skip(p))));
+        qe.then(Commands.literal("skip").executes(c -> player(c, (p, x) -> plugin.quests().skip(p, null)))
+                .then(Commands.argument("option", IntegerArgumentType.integer(1, 4))
+                        .executes(c -> player(c, (p, x) -> plugin.quests().skip(p, i(x, "option"))))));
+        qe.then(Commands.literal("map").then(id().executes(c -> player(c, (p, x) -> ed.printMap(p, s(x, "id"))))));
+        qe.then(Commands.literal("guide").then(id()
+                .then(Commands.literal("particles").then(Commands.argument("on", BoolArgumentType.bool())
+                        .executes(c -> player(c, (p, x) -> ed.setGuide(p, s(x, "id"), BoolArgumentType.getBool(x, "on"), null)))))
+                .then(Commands.literal("compass").then(Commands.argument("on", BoolArgumentType.bool())
+                        .executes(c -> player(c, (p, x) -> ed.setGuide(p, s(x, "id"), null, BoolArgumentType.getBool(x, "on"))))))));
         qe.then(Commands.literal("reset").requires(EditorCommands::isAdmin).then(Commands.argument("player", StringArgumentType.word())
                 .suggests((c, b) -> {
                     Bukkit.getOnlinePlayers().forEach(o -> b.suggest(o.getName()));

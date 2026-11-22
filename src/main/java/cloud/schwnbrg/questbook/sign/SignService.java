@@ -276,7 +276,7 @@ public final class SignService {
             }
             for (int i = 0; i < q.steps().size(); i++) {
                 Step s = q.steps().get(i);
-                if (s.trigger() instanceof Trigger.SignClick sc && sc.sign() != null) {
+                for (Trigger lt : Trigger.leaves(s.trigger())) if (lt instanceof Trigger.SignClick sc && sc.sign() != null) {
                     Block b = sc.sign().block();
                     if (b != null && b.getWorld().isChunkLoaded(b.getX() >> 4, b.getZ() >> 4) && !(b.getState() instanceof Sign)) {
                         out.add(q.id() + " step " + (i + 1) + ": sign at " + sc.sign() + " is not a sign");

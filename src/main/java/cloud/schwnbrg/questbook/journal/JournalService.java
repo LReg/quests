@@ -5,6 +5,8 @@ import cloud.schwnbrg.questbook.config.Messages;
 import cloud.schwnbrg.questbook.model.Quest;
 import cloud.schwnbrg.questbook.model.Step;
 import cloud.schwnbrg.questbook.model.Trigger;
+import cloud.schwnbrg.questbook.editor.Describe;
+import cloud.schwnbrg.questbook.runtime.GuideService;
 import cloud.schwnbrg.questbook.runtime.QuestService;
 import cloud.schwnbrg.questbook.runtime.Run;
 import cloud.schwnbrg.questbook.storage.PlayerData;
@@ -18,6 +20,7 @@ import net.kyori.adventure.inventory.Book;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.event.ClickEvent;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
+import org.bukkit.Location;
 import org.bukkit.entity.Player;
 
 /** Builds the virtual journal book. Nothing is ever placed in the inventory. */
@@ -73,7 +76,7 @@ public final class JournalService {
             page += qp.size();
         }
         for (Quest q : done) {
-            List<Component> qp = storyPages(d, q);
+            List<Component> qp = storyPages(p, d, q);
             first.put(q.id(), page);
             detail.addAll(qp);
             page += qp.size();
@@ -89,7 +92,9 @@ public final class JournalService {
         }
         if (!done.isEmpty()) items.add(m.get("journal-done-head"));
         for (Quest q : done) {
-            items.add(m.get("journal-entry-done", "title", plain(q.title())).clickEvent(ClickEvent.changePage(first.get(q.id()))));
+            String ending = d.progress.get(q.id()).ending();
+            items.add((ending == null ? m.get("journal-entry-done", "title", plain(q.title()))
+                    : m.get("journal-entry-done-ending", "title", plain(q.title()), "ending", plain(ending))).clickEvent(ClickEvent.changePage(first.get(q.id()))));
         }
         items.add(d.rumoursMuted
                 ? m.get("journal-rumours-off").clickEvent(ClickEvent.runCommand("/quest unmute"))
@@ -124,46 +129,100 @@ public final class JournalService {
             out.add(head.append(Component.newline()).append(m.get("journal-rewritten")));
             return out;
         }
+        Run r = quests.realRun(p, q.id());
         List<String> body = new ArrayList<>();
-        for (String l : s.text()) body.add(plain(l));
+        for (String l : r == null ? s.text() : quests.textFor(p, r, s)) body.add(plain(l));
+        // what the player chose so far in this run
+        List<String> chose = choiceLines(q, r == null ? pr.choices() : r.choices);
+        if (!chose.isEmpty()) {
+            body.add("");
+            body.addAll(chose);
+        }
+        // where to go, for quests whose editor turned the guide on
+        if (q.guide().particles() || q.guide().compass()) {
+            Location target = GuideService.nearest(p, GuideService.targets(s.trigger()));
+            if (target != null) {
+                body.add("");
+                body.add(plain(m.raw("journal-direction", "where", plugin.guide().direction(p, target))));
+            }
+        }
         // the heading (title may wrap to 2 lines) plus a blank line take 3 lines of the first page
         List<List<String>> chunks = BookPaginator.paginate(body, BookPaginator.LINES - 3);
 
         boolean hasHint = s.hint() != null && !s.hint().isBlank();
-        Run r = quests.realRun(p, q.id());
-        boolean cont = s.trigger() instanceof Trigger.Continue && r != null && r.armed;
-        // trailer: blank + hint lines + blank + [Continue] + [Abandon]
-        int trailer = 1 + (hasHint ? BookPaginator.wrap("Hint: " + plain(s.hint())).size() + 1 : 0) + (cont ? 1 : 0) + 1;
+        boolean armed = r != null && r.armed;
+        boolean cont = s.trigger() instanceof Trigger.Continue && armed;
+        List<Trigger.Option> buttons = armed && s.trigger() instanceof Trigger.Choice c ? c.options() : List.of();
+        boolean track = q.guide().compass() && !q.id().equals(d.tracked) && !GuideService.targets(s.trigger()).isEmpty();
+        // trailer: blank + hint lines + blank + [Continue] / one line per button + [Track] + [Abandon]
+        int trailer = 1 + (hasHint ? BookPaginator.wrap("Hint: " + plain(s.hint())).size() + 1 : 0) + (cont ? 1 : 0) + buttons.size()
+                + (track ? 1 : 0) + 1;
         boolean trailerOwnPage = chunks.get(chunks.size() - 1).size() + trailer > BookPaginator.LINES
                 || (chunks.size() == 1 && chunks.get(0).size() + 3 + trailer > BookPaginator.LINES);
 
         for (int i = 0; i < chunks.size(); i++) {
             Component c = i == 0 ? head.append(Component.newline()).append(Component.newline()) : Component.empty();
             c = c.append(Component.text(String.join("\n", chunks.get(i))));
-            if (i == chunks.size() - 1 && !trailerOwnPage) c = c.append(trailer(q, s, hasHint, cont));
+            if (i == chunks.size() - 1 && !trailerOwnPage) c = c.append(trailer(q, s, hasHint, cont, buttons, track));
             out.add(c);
         }
-        if (trailerOwnPage) out.add(trailer(q, s, hasHint, cont));
+        if (trailerOwnPage) out.add(trailer(q, s, hasHint, cont, buttons, track));
         return out;
     }
 
-    private Component trailer(Quest q, Step s, boolean hasHint, boolean cont) {
+    private Component trailer(Quest q, Step s, boolean hasHint, boolean cont, List<Trigger.Option> buttons, boolean track) {
         Component c = Component.empty();
         if (hasHint) c = c.append(Component.newline()).append(Component.newline()).append(m.get("journal-hint", "hint", plain(s.hint())));
         if (cont) c = c.append(Component.newline()).append(m.get("btn-continue").clickEvent(ClickEvent.runCommand("/quest continue " + q.id())));
+        for (Trigger.Option o : buttons) {
+            c = c.append(Component.newline()).append(m.get("journal-choice", "label", plain(o.label()))
+                    // the step id makes a button on a page left open a no-op once the player is on another step
+                    .clickEvent(ClickEvent.runCommand("/quest choose " + q.id() + " " + o.id() + " " + s.id())));
+        }
+        if (track) c = c.append(Component.newline()).append(m.get("btn-track").clickEvent(ClickEvent.runCommand("/quest track " + q.id())));
         return c.append(Component.newline()).append(m.get("btn-abandon").clickEvent(ClickEvent.runCommand("/quest abandon " + q.id())));
     }
 
-    private List<Component> storyPages(PlayerData d, Quest q) {
+    /** "» You chose: Pocket the gold", one per remembered pick, in the order they were made. */
+    private List<String> choiceLines(Quest q, Map<String, String> choices) {
+        List<String> out = new ArrayList<>();
+        for (var e : choices.entrySet()) {
+            Step st = q.step(e.getKey());
+            if (st == null || !(st.trigger() instanceof Trigger.Choice || st.trigger() instanceof Trigger.FirstOf)) continue;
+            out.add(plain(m.raw("journal-chose", "label", Describe.pickLabel(st, e.getValue()))));
+        }
+        return out;
+    }
+
+    /**
+     * A finished story: the steps the player actually went through (the whole quest for completions from before 1.2,
+     * which have no path), with their choices and the ending.
+     */
+    private List<Component> storyPages(Player p, PlayerData d, Quest q) {
         Progress pr = d.progress.get(q.id());
+        Run memory = new Run(q.id(), 0, false); // only for picking the text variants the player saw
+        // the completed run, not a replay that may be under way
+        Map<String, String> chosen = pr.doneChoices();
+        memory.choices.putAll(chosen);
+        List<Step> steps = new ArrayList<>();
+        for (String uid : pr.donePath()) {
+            Step st = q.step(uid);
+            if (st != null) steps.add(st);
+        }
+        if (steps.isEmpty()) steps = q.steps();
         List<String> body = new ArrayList<>();
         body.add(plain(q.title()));
         body.add("");
-        for (Step s : q.steps()) {
-            for (String l : s.text()) body.add(plain(l));
+        for (Step s : steps) {
+            for (String l : quests.textFor(p, memory, s)) body.add(plain(l));
+            String picked = chosen.get(s.id());
+            if (picked != null && (s.trigger() instanceof Trigger.Choice || s.trigger() instanceof Trigger.FirstOf)) {
+                body.add(plain(m.raw("journal-chose", "label", Describe.pickLabel(s, picked))));
+            }
             for (String l : s.after()) body.add(plain(l));
             body.add("");
         }
+        if (pr.ending() != null) body.add(plain(m.raw("journal-ending", "ending", pr.ending())));
         body.add(plain(m.raw("journal-completed", "date", new SimpleDateFormat("yyyy-MM-dd").format(new Date(pr.lastCompletedAt())))));
         if (q.repeatable()) body.add(plain(m.raw("journal-times", "count", String.valueOf(pr.completions()))));
         String first = plugin.chronicleName(q.id());

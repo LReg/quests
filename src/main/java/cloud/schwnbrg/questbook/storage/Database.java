@@ -1,5 +1,8 @@
 package cloud.schwnbrg.questbook.storage;
 
+import java.net.URLDecoder;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -7,6 +10,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -66,6 +70,57 @@ public final class Database {
                 s.execute("PRAGMA user_version = " + VERSION);
             }
         }
+        // Added in 1.2 as its own table (not new columns), so the 1.1 jar still works on a database the 1.2 jar has used.
+        try (Statement s = conn.createStatement()) {
+            s.execute("CREATE TABLE IF NOT EXISTS progress_extra (player_uuid TEXT NOT NULL, quest_id TEXT NOT NULL, choices TEXT, "
+                    + "path TEXT, ending TEXT, done_choices TEXT, done_path TEXT, PRIMARY KEY (player_uuid, quest_id))");
+        }
+        // a database from an early 1.2 build has the table without the last two columns
+        for (String col : List.of("done_choices", "done_path")) {
+            try (Statement s = conn.createStatement()) {
+                s.execute("ALTER TABLE progress_extra ADD COLUMN " + col + " TEXT");
+            } catch (SQLException alreadyThere) {
+                // the usual case
+            }
+        }
+    }
+
+    // choices are stored as key=value&key=value with both parts URL-encoded, the path as comma-separated URL-encoded step ids
+
+    static String encodeChoices(Map<String, String> m) {
+        StringBuilder b = new StringBuilder();
+        for (var e : m.entrySet()) {
+            if (b.length() > 0) b.append('&');
+            b.append(URLEncoder.encode(e.getKey(), StandardCharsets.UTF_8)).append('=').append(URLEncoder.encode(e.getValue(), StandardCharsets.UTF_8));
+        }
+        return b.toString();
+    }
+
+    static Map<String, String> decodeChoices(String s) {
+        Map<String, String> m = new LinkedHashMap<>();
+        if (s == null || s.isEmpty()) return m;
+        for (String part : s.split("&")) {
+            int i = part.indexOf('=');
+            if (i <= 0) continue;
+            m.put(URLDecoder.decode(part.substring(0, i), StandardCharsets.UTF_8), URLDecoder.decode(part.substring(i + 1), StandardCharsets.UTF_8));
+        }
+        return m;
+    }
+
+    static String encodePath(List<String> path) {
+        StringBuilder b = new StringBuilder();
+        for (String id : path) {
+            if (b.length() > 0) b.append(',');
+            b.append(URLEncoder.encode(id, StandardCharsets.UTF_8));
+        }
+        return b.toString();
+    }
+
+    static List<String> decodePath(String s) {
+        if (s == null || s.isEmpty()) return List.of();
+        List<String> out = new ArrayList<>();
+        for (String part : s.split(",")) out.add(URLDecoder.decode(part, StandardCharsets.UTF_8));
+        return out;
     }
 
     private <T> CompletableFuture<T> async(Supplier<T> work) {
@@ -94,6 +149,16 @@ public final class Database {
                     while (r.next()) {
                         d.progress.put(r.getString("quest_id"), new Progress(r.getString("quest_id"), Progress.State.valueOf(r.getString("state")),
                                 r.getInt("step"), r.getLong("started_at"), r.getLong("updated_at"), r.getInt("completions"), r.getLong("last_completed_at")));
+                    }
+                }
+                try (PreparedStatement p = conn.prepareStatement("SELECT quest_id, choices, path, ending, done_choices, done_path FROM progress_extra WHERE player_uuid=?")) {
+                    p.setString(1, id.toString());
+                    ResultSet r = p.executeQuery();
+                    while (r.next()) {
+                        Progress pr = d.progress.get(r.getString(1));
+                        if (pr == null) continue;
+                        d.progress.put(pr.questId(), pr.withRun(decodeChoices(r.getString(2)), decodePath(r.getString(3))).withEnding(r.getString(4))
+                                .withDone(decodeChoices(r.getString(5)), decodePath(r.getString(6))));
                     }
                 }
                 try (PreparedStatement p = conn.prepareStatement("SELECT quest_id FROM rumours_seen WHERE player_uuid=?")) {
@@ -126,15 +191,32 @@ public final class Database {
                 s.setLong(8, p.lastCompletedAt());
                 s.executeUpdate();
             }
+            boolean empty = p.choices().isEmpty() && p.path().isEmpty() && p.ending() == null
+                    && p.doneChoices().isEmpty() && p.donePath().isEmpty();
+            try (PreparedStatement s = conn.prepareStatement(empty ? "DELETE FROM progress_extra WHERE player_uuid=? AND quest_id=?"
+                    : "INSERT OR REPLACE INTO progress_extra (player_uuid, quest_id, choices, path, ending, done_choices, done_path) VALUES (?,?,?,?,?,?,?)")) {
+                s.setString(1, id.toString());
+                s.setString(2, p.questId());
+                if (!empty) {
+                    s.setString(3, encodeChoices(p.choices()));
+                    s.setString(4, encodePath(p.path()));
+                    s.setString(5, p.ending());
+                    s.setString(6, encodeChoices(p.doneChoices()));
+                    s.setString(7, encodePath(p.donePath()));
+                }
+                s.executeUpdate();
+            }
         });
     }
 
     public void deleteProgress(UUID id, String quest) {
         run(() -> {
-            try (PreparedStatement s = conn.prepareStatement("DELETE FROM progress WHERE player_uuid=? AND quest_id=?")) {
-                s.setString(1, id.toString());
-                s.setString(2, quest);
-                s.executeUpdate();
+            for (String table : List.of("progress", "progress_extra")) {
+                try (PreparedStatement s = conn.prepareStatement("DELETE FROM " + table + " WHERE player_uuid=? AND quest_id=?")) {
+                    s.setString(1, id.toString());
+                    s.setString(2, quest);
+                    s.executeUpdate();
+                }
             }
         });
     }
@@ -200,7 +282,9 @@ public final class Database {
         });
     }
 
-    public record Stats(int started, int active, Map<Integer, Integer> perStep, int completed, int totalCompletions, int abandoned) {}
+    /** {@code endings}: players per ending of their last completion. */
+    public record Stats(int started, int active, Map<Integer, Integer> perStep, int completed, int totalCompletions, int abandoned,
+                        Map<String, Integer> endings) {}
 
     public CompletableFuture<Stats> stats(String quest) {
         return async(() -> {
@@ -216,10 +300,17 @@ public final class Database {
                     ResultSet r = p.executeQuery();
                     while (r.next()) perStep.put(r.getInt(1), r.getInt(2));
                 }
-                return new Stats(started, active, perStep, completed, total, abandoned);
+                Map<String, Integer> endings = new LinkedHashMap<>();
+                try (PreparedStatement p = conn.prepareStatement("SELECT ending, COUNT(*) FROM progress_extra WHERE quest_id=? AND ending IS NOT NULL "
+                        + "AND ending <> '' GROUP BY ending ORDER BY COUNT(*) DESC")) {
+                    p.setString(1, quest);
+                    ResultSet r = p.executeQuery();
+                    while (r.next()) endings.put(r.getString(1), r.getInt(2));
+                }
+                return new Stats(started, active, perStep, completed, total, abandoned, endings);
             } catch (SQLException e) {
                 log.warning("Stats failed: " + e.getMessage());
-                return new Stats(0, 0, Map.of(), 0, 0, 0);
+                return new Stats(0, 0, Map.of(), 0, 0, 0, Map.of());
             }
         });
     }

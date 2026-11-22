@@ -49,6 +49,7 @@ public final class QuestbookPlugin extends JavaPlugin {
     private DialogSupport dialogs;
     private AdvancementSync advancements;
     private ExportService export;
+    private cloud.schwnbrg.questbook.runtime.GuideService guide;
     private final Map<String, String> chronicle = new HashMap<>();
 
     @Override
@@ -77,6 +78,8 @@ public final class QuestbookPlugin extends JavaPlugin {
         chatCapture = new ChatCapture(this, messages);
         advancements = new AdvancementSync(this);
         export = new ExportService(this);
+        guide = new cloud.schwnbrg.questbook.runtime.GuideService(this, quests, messages);
+        applyLimits();
         dialogs = createDialogs();
 
         quests.setQuests(loadQuests());
@@ -97,6 +100,7 @@ public final class QuestbookPlugin extends JavaPlugin {
         });
 
         new PreviewService(this, editor).start();
+        guide.start();
         if (!Bukkit.getOnlinePlayers().isEmpty()) {
             getLogger().warning("Players are online while the plugin enables: /reload is not supported. Restart the server instead.");
         }
@@ -147,6 +151,7 @@ public final class QuestbookPlugin extends JavaPlugin {
         Map<String, Quest> before = new LinkedHashMap<>(quests.quests());
 
         reloadConfig();
+        applyLimits();
         messages.load();
         quests.setQuests(loadQuests());
         for (String id : before.keySet()) if (quests.quest(id) == null) advancements.unregister(id);
@@ -178,6 +183,7 @@ public final class QuestbookPlugin extends JavaPlugin {
             p.sendMessage(messages.get("stats-line", "started", String.valueOf(s.started()), "active", String.valueOf(s.active()),
                     "completed", String.valueOf(s.completed()), "total", String.valueOf(s.totalCompletions()), "abandoned", String.valueOf(s.abandoned())));
             s.perStep().forEach((step, n) -> p.sendMessage(messages.get("stats-step", "step", String.valueOf(step + 1), "count", String.valueOf(n))));
+            s.endings().forEach((ending, n) -> p.sendMessage(messages.get("stats-ending", "ending", ending, "count", String.valueOf(n))));
         }));
     }
 
@@ -195,4 +201,13 @@ public final class QuestbookPlugin extends JavaPlugin {
     public DialogSupport dialogs() { return dialogs; }
     public AdvancementSync advancements() { return advancements; }
     public ExportService export() { return export; }
+    public cloud.schwnbrg.questbook.runtime.GuideService guide() { return guide; }
+
+    /** Text limits from config.yml (limits:), falling back to the defaults for missing keys. */
+    private void applyLimits() {
+        var d = Validation.Limits.DEFAULT;
+        var c = getConfig();
+        Validation.setLimits(new Validation.Limits(c.getInt("limits.summary", d.summary()), c.getInt("limits.hint", d.hint()),
+                c.getInt("limits.line", d.line()), c.getInt("limits.lines_per_step", d.linesPerStep()), c.getInt("limits.steps", d.steps())));
+    }
 }

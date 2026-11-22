@@ -28,10 +28,16 @@ public final class ExportService {
     }
 
     public void send(String type, Quest q, Player p, int step) {
+        send(type, q, p, step, null);
+    }
+
+    /** {@code ending} is added as an "ending" field only when the quest was finished with a named ending. */
+    public void send(String type, Quest q, Player p, int step, String ending) {
         String url = plugin.getConfig().getString("export.webhook_url", "");
         if (url == null || url.isBlank()) return;
         String json = "{\"type\":" + js(type) + ",\"quest\":" + js(q.id()) + ",\"title\":" + js(cloud.schwnbrg.questbook.model.Validation.plain(q.title()))
                 + ",\"player\":" + js(p.getName()) + ",\"uuid\":" + js(p.getUniqueId().toString()) + ",\"step\":" + step
+                + (ending == null ? "" : ",\"ending\":" + js(cloud.schwnbrg.questbook.model.Validation.plain(ending)))
                 + ",\"at\":" + js(Instant.now().toString()) + ",\"server\":" + js(plugin.getConfig().getString("export.server_name", "schwnbrg")) + "}";
         if (!queue.offer(json)) return; // dropped when more than 500 are queued
         if (draining.compareAndSet(false, true)) plugin.getServer().getScheduler().runTaskAsynchronously(plugin, this::drain);
